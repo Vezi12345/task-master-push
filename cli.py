@@ -9,20 +9,24 @@ from agent import orchestrator
 from agent.rank import RankedJob
 
 BANNER = """
-Task Master  ·  local-first job search for South African job seekers
+Task Master  ·  AI Job Application Agent for South Africa
 type "help" for tips, "quit" to exit
 """
 
 HELP = """
-Tips:
-  Say what you want naturally, e.g.:
-    "I'm a recent computer science graduate in Durban. Find me entry-level
-     software engineering jobs, preferably remote or in Durban, and show me
-     the best matches."
-  Add filters: "paying at least R25k", "within 50 km", "fully remote", "onsite".
-  After I show matches, type a job number to keep it (saved to data/kept_jobs.json).
-Commands:
-  search   run the search and ranking
+Natural language commands:
+  "Find me entry-level software developer jobs in Durban"
+  "Apply to the best 5 jobs"
+  "Apply to jobs where I have at least 80% match"
+  "Show my applications"
+  "Show applications that need my attention"
+  "Approve application abc123"
+  "Cancel application abc123"
+  "Approve all applications"
+  "Cancel all applications"
+
+Search shortcuts:
+  search   run the search and ranking (legacy mode)
   edit     correct what I understood (add your fix to the request)
   more     show the ranked list again
   help     show this help
@@ -46,6 +50,10 @@ def main() -> None:
     region = config.load_region()
     llm = llm_module if not llm_module.LLM_OFFLINE else None
 
+    from agent.orchestrator import JobApplicationAgent
+
+    agent = JobApplicationAgent(region, llm)
+
     prompt = _prompt()
     while prompt not in ("quit", "exit", "q"):
         if prompt in ("help", "?"):
@@ -53,26 +61,34 @@ def main() -> None:
             prompt = _prompt()
             continue
 
-        extra = ""
-        while True:
-            if extra:
-                combined = f"{prompt} {extra}".strip()
-            else:
-                combined = prompt
-            result = orchestrator.run_pipeline(combined, region, llm)
-            _print_notes(result.notes)
-            _print_understood(result.query)
-            command = input("[search / edit / quit]> ").strip().lower()
-            if command in ("search", "s", "go", "run"):
-                _run_search_and_rank(result, region, llm)
-                break
-            if command in ("edit", "e"):
-                extra = input("Corrections (e.g. 'salary at least R25k', 'Durban and Cape Town'): ").strip()
-                continue
-            if command in ("quit", "exit", "q"):
-                print("Bye.")
-                return
-            print("Unknown command. Try 'search', 'edit', or 'quit'.")
+        if prompt in ("search", "s", "go", "run"):
+            _legacy_search(region, llm)
+            prompt = _prompt()
+            continue
+
+        result = agent.process_input(prompt)
+
+        for msg in result.messages:
+            if msg.role == "agent":
+                print(f"\n{msg.content}")
+
+        if result.error:
+            print(f"\n  Error: {result.error}")
+
+        if result.ranked:
+            _print_ranked(result.ranked)
+
+        if result.matched_jobs:
+            _print_matched(result.matched_jobs)
+
+        if result.applications:
+            _print_applications(result.applications)
+
+        if result.missing_information:
+            print("\n  Please provide the missing information above.")
+
+        if result.state and result.state.value == "awaiting_approval":
+            print("\n  Reply 'approve' to submit, or 'cancel' to abort.")
 
         prompt = _prompt()
     print("Bye.")
@@ -86,9 +102,27 @@ def _prompt() -> str:
         sys.exit(0)
 
 
-def _print_notes(notes: list[str]) -> None:
-    for note in notes:
+def _legacy_search(region, llm) -> None:
+    prompt = input("Enter search query: ").strip()
+    if not prompt:
+        return
+    result = orchestrator.run_pipeline(prompt, region, llm)
+    for note in result.notes:
         print(f"  note: {note}")
+    _print_understood(result.query)
+    print()
+    command = input("[search / edit / quit]> ").strip().lower()
+    if command in ("search", "s", "go", "run"):
+        jobs, messages = orchestrator.search_jobs(result.query, region)
+        ranked = orchestrator.rank_jobs(jobs, result.query, llm)
+        for message in messages:
+            print(f"  searching: {message}")
+        print(f"  found {len(jobs)} jobs -> {len(ranked)} after filtering.\n")
+        if ranked:
+            _print_ranked(ranked)
+    elif command in ("quit", "exit", "q"):
+        print("Bye.")
+        sys.exit(0)
 
 
 def _print_understood(query) -> None:
@@ -108,75 +142,61 @@ def _print_understood(query) -> None:
     print(f"  skills:        {', '.join(query.skills) if query.skills else '(not specified)'}")
 
 
-def _run_search_and_rank(result, region, llm) -> None:
-    jobs, messages = orchestrator.search_jobs(result.query, region)
-    ranked = orchestrator.rank_jobs(jobs, result.query, llm)
-    for message in messages:
-        print(f"  searching: {message}")
-    print(f"  found {len(jobs)} jobs -> {len(ranked)} after filtering.\n")
-    if not ranked:
-        print("  No jobs matched. Try 'edit' to loosen your requirements.")
-        return
-    _print_ranked(ranked)
-    _keep_loop(ranked)
-
-
-def _print_ranked(ranked: list[RankedJob]) -> None:
-    print("Best matches:\n")
+def _print_ranked(ranked: list) -> None:
+    print("\nBest matches:\n")
     for idx, item in enumerate(ranked, start=1):
         job = item.job
         location = job.location or "location not stated"
         remote_note = "Remote" if job.remote else "On-site"
-        print(f" #{idx}  {job.title} — {job.company} · {location} ({remote_note})  {item.score}%")
+        print(f" #{idx}  {job.title} - {job.company} | {location} ({remote_note})  {item.score}%")
         for reason in item.reasons:
             print(f"     {reason}")
-        print(f"     → {job.url}" if job.url else "     → (no link available)")
+        print(f"     -> {job.url}" if job.url else "     -> (no link available)")
         print()
 
 
-def _keep_loop(ranked: list[RankedJob]) -> None:
-    while True:
-        choice = input("[number to keep · 'more' · 'edit' · 'quit']> ").strip().lower()
-        if choice in ("quit", "exit", "q"):
-            return
-        if choice in ("more", "m", ""):
-            _print_ranked(ranked)
-            continue
-        if choice == "edit":
-            return
-        if choice.isdigit():
-            index = int(choice) - 1
-            if 0 <= index < len(ranked):
-                _keep_job(ranked[index].job)
-            else:
-                print(f"  no job #{choice}")
-            continue
-        print("  type a job number, 'more', or 'quit'")
+def _print_matched(matched: list) -> None:
+    print("\nCandidate matches:\n")
+    for idx, item in enumerate(matched, start=1):
+        job = item["job"]
+        rank = item["rank"]
+        match = item["candidate_match"]
+        readiness = item["readiness"]
+        location = job.location or "location not stated"
+        print(f" #{idx}  {job.title} - {job.company} | {location}")
+        print(f"     Job preference: {rank.score}%  |  Candidate match: {match.score}%  |  Readiness: {readiness.score}%")
+        if match.matched_skills:
+            print(f"     Matched: {', '.join(match.matched_skills[:5])}")
+        if match.missing_skills:
+            print(f"     Missing: {', '.join(match.missing_skills[:5])}")
+        if match.strengths:
+            for s in match.strengths:
+                print(f"     + {s}")
+        if match.concerns:
+            for c in match.concerns:
+                print(f"     - {c}")
+        print(f"     -> {job.url}" if job.url else "     -> (no link available)")
+        print()
 
 
-def _keep_job(job) -> None:
-    payload = {
-        "title": job.title,
-        "company": job.company,
-        "location": job.location,
-        "remote": job.remote,
-        "salary_text": job.salary_text,
-        "url": job.url,
-        "source": job.source,
-    }
-    records = _load_kept()
-    records.append(payload)
-    config.KEPT_JOBS_FILE.write_text(json.dumps(records, indent=2, ensure_ascii=False), encoding="utf-8")
-    print(f"  kept '{job.title} at {job.company}' -> {config.KEPT_JOBS_FILE}")
-
-
-def _load_kept() -> list[dict]:
-    if not config.KEPT_JOBS_FILE.exists():
-        return []
-    try:
-        return json.loads(config.KEPT_JOBS_FILE.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return []
+def _print_applications(applications: list) -> None:
+    print("\nApplications:\n")
+    for idx, app in enumerate(applications, 1):
+        preview = app.to_preview() if hasattr(app, "to_preview") else app
+        status = preview.get("status", "unknown")
+        print(f" #{idx}  {preview.get('role', 'N/A')} - {preview.get('company', 'N/A')} | {preview.get('location', 'N/A')}")
+        print(f"     Status: {status}  |  Priority: {preview.get('application_priority', 0)}%")
+        if preview.get("warnings"):
+            for w in preview["warnings"]:
+                print(f"     Warning: {w}")
+        if preview.get("errors"):
+            for e in preview["errors"]:
+                print(f"     Error: {e}")
+        if preview.get("documents", {}).get("cover_letter_ready"):
+            print("     Document: Cover letter ready")
+        if preview.get("documents", {}).get("cv_ready"):
+            print("     Document: CV ready")
+        print()
 
 
 if __name__ == "__main__":

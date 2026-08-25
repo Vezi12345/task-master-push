@@ -75,3 +75,13 @@ def test_currency_from_region():
     region = config.load_region("za")
     query = parse_intent("find me any jobs", region)
     assert query.currency == "ZAR"
+
+
+def test_query_wording_not_extracted_as_keywords():
+    region = config.load_region("za")
+    query = parse_intent("Find me software engineering jobs using Python in South Africa.", region)
+    assert "using" not in query.keywords
+    query = parse_intent("Find me software engineering internships in Johannesburg.", region)
+    assert "internship" not in query.keywords
+    assert "internships" not in query.keywords
+    assert query.seniority == "entry-level"

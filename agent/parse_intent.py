@@ -22,6 +22,142 @@ class JobQuery(BaseModel):
     skills: list[str] = Field(default_factory=list)
 
 
+class IntentType(str):
+    SEARCH = "search"
+    APPLY = "apply"
+    SHOW_JOBS = "show_jobs"
+    SHOW_APPLICATIONS = "show_applications"
+    NEEDS_ATTENTION = "needs_attention"
+    APPROVE = "approve"
+    CANCEL = "cancel"
+    ANSWER = "answer"
+    STATUS = "status"
+    HELP = "help"
+    UNKNOWN = "unknown"
+
+
+class UserIntent(BaseModel):
+    intent_type: str = "search"
+    search_query: Optional[JobQuery] = None
+    apply_count: Optional[int] = None
+    min_match_score: Optional[int] = None
+    answers: dict[str, str] = Field(default_factory=dict)
+    target_id: Optional[str] = None
+    message: str = ""
+
+
+_APPLY_PATTERNS = [
+    re.compile(r"apply\s+to\s+(?:the\s+)?(?:best\s+)?(\d+)", re.IGNORECASE),
+    re.compile(r"apply\s+to\s+(?:the\s+)?best\s+(\d+)", re.IGNORECASE),
+    re.compile(r"apply\s+to\s+(?:the\s+)?(?:top\s+)?(\d+)", re.IGNORECASE),
+    re.compile(r"apply\s+(\d+)", re.IGNORECASE),
+    re.compile(r"submit\s+(?:the\s+)?(?:best\s+)?(\d+)", re.IGNORECASE),
+]
+
+_MATCH_SCORE_PATTERNS = [
+    re.compile(r"(?:where\s+)?(?:i\s+)?(?:have\s+)?(?:at\s+least|above|over|>=?)\s*(\d+)\s*%", re.IGNORECASE),
+    re.compile(r"(\d+)\s*%\s*match", re.IGNORECASE),
+]
+
+_SHOW_APPLICATIONS_PATTERNS = [
+    re.compile(r"show\s+(?:my\s+)?applications?", re.IGNORECASE),
+    re.compile(r"application\s+(?:status|history)", re.IGNORECASE),
+    re.compile(r"list\s+(?:my\s+)?applications?", re.IGNORECASE),
+]
+
+_NEEDS_ATTENTION_PATTERNS = [
+    re.compile(r"(?:show\s+)?applications?\s+(?:that\s+)?(?:need|needs)\s+(?:my\s+)?attention", re.IGNORECASE),
+    re.compile(r"(?:show\s+)?pending\s+questions?", re.IGNORECASE),
+]
+
+_APPROVE_PATTERNS = [
+    re.compile(r"approve\s+(?:application\s+)?(\w+)", re.IGNORECASE),
+    re.compile(r"approve\s+(?:all|the|these|those)\s*(?:applications?)?", re.IGNORECASE),
+    re.compile(r"submit\s+(?:application\s+)?(\w+)", re.IGNORECASE),
+    re.compile(r"submit\s+(?:all|the|these|those)\s*(?:applications?)?", re.IGNORECASE),
+    re.compile(r"yes\s*,?\s*submit", re.IGNORECASE),
+]
+
+_CANCEL_PATTERNS = [
+    re.compile(r"cancel\s+(?:application\s+)?(\w+)", re.IGNORECASE),
+    re.compile(r"cancel\s+(?:all|the|these|those)\s*(?:applications?)?", re.IGNORECASE),
+    re.compile(r"no\s*,?\s*(?:don'?t|do\s+not)\s+submit", re.IGNORECASE),
+    re.compile(r"stop", re.IGNORECASE),
+]
+
+
+def parse_user_intent(prompt: str, region: dict, llm=None) -> UserIntent:
+    lowered = prompt.strip().lower()
+
+    for pattern in _NEEDS_ATTENTION_PATTERNS:
+        if pattern.search(lowered):
+            return UserIntent(intent_type="needs_attention", message=prompt)
+
+    for pattern in _SHOW_APPLICATIONS_PATTERNS:
+        if pattern.search(lowered):
+            return UserIntent(intent_type="show_applications", message=prompt)
+
+    for pattern in _APPROVE_PATTERNS:
+        m = pattern.search(lowered)
+        if m:
+            target_id = None
+            try:
+                target_id = m.group(1)
+            except IndexError:
+                pass
+            if target_id and target_id in ("all", "the", "these", "those", "applications", "application"):
+                target_id = None
+            return UserIntent(intent_type="approve", target_id=target_id, message=prompt)
+
+    for pattern in _CANCEL_PATTERNS:
+        m = pattern.search(lowered)
+        if m:
+            target_id = None
+            try:
+                target_id = m.group(1)
+            except IndexError:
+                pass
+            if target_id and target_id in ("all", "the", "these", "those", "applications", "application"):
+                target_id = None
+            return UserIntent(intent_type="cancel", target_id=target_id, message=prompt)
+
+    apply_count = None
+    for pattern in _APPLY_PATTERNS:
+        m = pattern.search(lowered)
+        if m:
+            apply_count = int(m.group(1))
+            break
+
+    min_match = None
+    for pattern in _MATCH_SCORE_PATTERNS:
+        m = pattern.search(lowered)
+        if m:
+            min_match = int(m.group(1))
+            break
+
+    has_apply_intent = any(
+        word in lowered
+        for word in ["apply", "submit", "send application"]
+    )
+
+    query = parse_intent(prompt, region, llm)
+
+    if apply_count is not None or has_apply_intent:
+        return UserIntent(
+            intent_type="apply",
+            search_query=query,
+            apply_count=apply_count,
+            min_match_score=min_match,
+            message=prompt,
+        )
+
+    return UserIntent(
+        intent_type="search",
+        search_query=query,
+        message=prompt,
+    )
+
+
 ROLE_PHRASES: list[tuple[list[str], list[str]]] = [
     (
         ["software engineer", "software developer"],
@@ -75,6 +211,8 @@ SENIORITY_ENTRY = [
     "recent graduate",
     "recently graduated",
     "intern",
+    "internship",
+    "internships",
     "learner",
     "trainee",
     "no experience",
@@ -96,6 +234,7 @@ KEYWORD_STOPWORDS = {
     "100", "paid", "paying", "pays", "pay", "salary", "salaries", "minimum",
     "least", "monthly", "month", "per", "annum", "annual", "week", "weeks",
     "year", "years", "experience", "recently", "recent", "engineering",
+    "using",
 }
 
 

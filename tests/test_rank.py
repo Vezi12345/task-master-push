@@ -94,3 +94,65 @@ def test_domain_keyword_boosts_matching_job():
     assert len(ranked) == 2
     assert ranked[0].job is aerospace
     assert ranked[0].score > ranked[1].score
+
+
+def test_admin_clerk_synonyms_not_filtered():
+    query = _query("Find me admin clerk jobs in Durban.")
+    ranked = rank_jobs(_jobs(), query)
+    titles = [item.job.title for item in ranked]
+    assert "Administration Clerk" in titles
+    admin = next(item for item in ranked if item.job.title == "Administration Clerk")
+    role_reasons = [r for r in admin.reasons if r.startswith("Role")]
+    assert any("✓" in r for r in role_reasons)
+
+
+def test_web_developer_matches_software_role():
+    query = _query("Find me software developer jobs.")
+    ranked = rank_jobs(_jobs(), query)
+    titles = [item.job.title for item in ranked]
+    assert "Junior Web Developer" in titles
+    web = next(item for item in ranked if item.job.title == "Junior Web Developer")
+    role_reasons = [r for r in web.reasons if r.startswith("Role")]
+    assert any("✓" in r for r in role_reasons)
+
+
+def test_engineer_surface_form_matches_software_role():
+    query = _query("Find me software engineer jobs.")
+    backend = Job(
+        title="Backend Engineer",
+        company="CloudCorp",
+        location="Cape Town",
+        description="Build APIs and distributed services.",
+    )
+    ranked = rank_jobs([backend], query)
+    assert ranked and ranked[0].job is backend
+    assert any("✓" in r for r in ranked[0].reasons if r.startswith("Role"))
+
+
+def test_role_allowed_and_score_share_synonym_semantics():
+    query = _query("Find me data analyst jobs.")
+    canonical = Job(
+        title="Data Analyst",
+        company="CanonicalCo",
+        location="Cape Town",
+        description="Use SQL to analyse business data.",
+    )
+    synonym = Job(
+        title="Insights Specialist",
+        company="SynonymCo",
+        location="Cape Town",
+        description="Work on analytics projects with SQL and Excel.",
+    )
+    ranked = rank_jobs([canonical, synonym], query)
+    assert len(ranked) == 2
+    assert ranked[0].job is canonical
+    assert ranked[1].job is synonym
+
+
+def test_unrelated_roles_still_filtered():
+    query = _query("Find me software developer jobs.")
+    ranked = rank_jobs(_jobs(), query)
+    titles = [item.job.title for item in ranked]
+    assert "Administration Clerk" not in titles
+    assert "Finance Graduate" not in titles
+    assert "IT Support Technician" not in titles

@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 
 from sources.base import Job
 
-from .parse_intent import JobQuery
+from .parse_intent import ROLE_PHRASES, JobQuery
 
 W_ROLE = 25
 W_SENIORITY = 15
@@ -69,11 +69,58 @@ def _filter_jobs(jobs: list[Job], query: JobQuery) -> list[Job]:
     return kept
 
 
+def _role_terms(query: JobQuery) -> list[str]:
+    """Surface-form terms for the queried role groups, derived from the
+    existing ROLE_PHRASES vocabulary (no parallel synonym list).
+
+    For every role group named by ``query.roles`` we reuse that group's own
+    synonym phrases, plus the trailing role noun of each canonical label
+    (e.g. "software engineer" -> "engineer", "software developer" ->
+    "developer"). Falls back to the raw role strings when no known group is
+    named so pre-existing behavior is preserved for unknown roles.
+    """
+    wanted = {role.strip().lower() for role in query.roles}
+    terms: list[str] = []
+    seen: set[str] = set()
+    for canonical, phrases in ROLE_PHRASES:
+        if wanted & {c.strip().lower() for c in canonical}:
+            for phrase in phrases:
+                key = phrase.strip().lower()
+                if key and key not in seen:
+                    seen.add(key)
+                    terms.append(key)
+    for role in query.roles:
+        noun = role.strip().lower().split(" / ")[-1].split()[-1]
+        if noun and noun not in seen:
+            seen.add(noun)
+            terms.append(noun)
+    return terms or [role.strip().lower() for role in query.roles]
+
+
+def _role_match(job: Job, query: JobQuery) -> tuple[str | None, bool]:
+    """Return ``(matched_term, matched_in_title)`` using the shared synonym
+    set. A term in the title is a stronger signal than one in the description
+    only; both share the exact same matching semantics as filtering.
+    """
+    if not query.roles:
+        return None, False
+    title = job.title.lower()
+    haystack = f"{title} {job.description}".lower()
+    terms = _role_terms(query)
+    for term in terms:
+        if term in title:
+            return term, True
+    for term in terms:
+        if term in haystack:
+            return term, False
+    return None, False
+
+
 def _role_allowed(job: Job, query: JobQuery) -> bool:
     if not query.roles:
         return True
-    haystack = f"{job.title} {job.description}".lower()
-    return any(role.lower() in haystack for role in query.roles)
+    matched, _ = _role_match(job, query)
+    return matched is not None
 
 
 def _seniority_allowed(job: Job, query: JobQuery) -> bool:
@@ -130,14 +177,12 @@ def _role_score(job: Job, query: JobQuery, reasons: list[str]) -> int:
     if not query.roles:
         reasons.append("Role:      • (not specified)")
         return W_ROLE
-    title = job.title.lower()
-    haystack = f"{title} {job.description}".lower()
-    matched = [r for r in query.roles if r.lower() in haystack]
-    if any(r.lower() in title for r in query.roles):
-        reasons.append(f"Role:      ✓ '{matched[0]}' in title")
+    matched, in_title = _role_match(job, query)
+    if in_title:
+        reasons.append(f"Role:      ✓ '{matched}' in title")
         return W_ROLE
     if matched:
-        reasons.append(f"Role:      ~ '{matched[0]}' in description only")
+        reasons.append(f"Role:      ~ '{matched}' in description only")
         return round(W_ROLE * 0.7)
     reasons.append("Role:      ✗ no matching role")
     return 0

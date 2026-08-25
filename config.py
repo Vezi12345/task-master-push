@@ -8,6 +8,8 @@ ROOT_DIR = Path(__file__).resolve().parent
 REGIONS_DIR = ROOT_DIR / "config" / "regions"
 DATA_DIR = ROOT_DIR / "data"
 KEPT_JOBS_FILE = DATA_DIR / "kept_jobs.json"
+APPLICATIONS_FILE = DATA_DIR / "applications.json"
+ANSWERS_FILE = DATA_DIR / "answers.json"
 
 DEFAULT_REGION = os.environ.get("TASK_MASTER_REGION", "za")
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
