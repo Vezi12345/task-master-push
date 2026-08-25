@@ -59,7 +59,7 @@
   },
   "sources": [
     {"name": "demo", "enabled": true},
-    {"name": "dpsa_circular", "enabled": false, "url": "", "default_company": "DPSA / Government", "note": "Set 'url' to this week's DPSA circular PDF link, then set enabled=true."},
+    {"name": "dpsa_circular", "enabled": true, "url": "https://www.dpsa.gov.za/dpsa2g/documents/vacancies/2026/PSV%20CIRCULAR%2027%20of%202026.pdf", "default_company": "DPSA / Government"},
     {"name": "schemaorg", "enabled": false, "search_url": "", "note": "Set 'search_url' to a board search page (e.g. a za.indeed.com search URL), then set enabled=true."}
   ]
 }

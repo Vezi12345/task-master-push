@@ -10,10 +10,13 @@ def test_demo_source_returns_all_bundled_jobs():
     assert all(job.source == "demo" for job in jobs)
 
 
-def test_search_uses_enabled_sources_only():
+def test_search_uses_enabled_sources_only(monkeypatch):
     region = config.load_region("za")
     enabled = {s["name"] for s in region["sources"] if s.get("enabled")}
-    assert enabled == {"demo"}
+    assert enabled == {"demo", "dpsa_circular"}
+    from sources.dpsa_circular import DpsaCircularSource
+
+    monkeypatch.setattr(DpsaCircularSource, "search", lambda self, query: [])
     query = parse_intent("entry-level software engineering jobs", region)
     jobs, messages = search_jobs(query, region)
     assert any("demo" in m for m in messages)
