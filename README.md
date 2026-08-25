@@ -8,10 +8,12 @@ Milestone 0 scope, built per the approved design:
 
 - CLI chat loop
 - Natural-language request -> structured intent (Ollama + rule fallbacks)
-- SA job search (bundled demo dataset now; DPSA + schema.org sources ready but disabled)
+- SA job search: bundled demo dataset (always available offline) plus the live DPSA Public Service Vacancy Circular
 - Deterministic filtering + ranking with human-readable reasons for every match
 
-Live job sources are intentionally **disabled by default**. The intent -> search -> rank -> explain pipeline is proven against the offline demo dataset first. Enable live sources only when you're ready (see below).
+The offline demo pipeline is always available, and `dpsa_circular` is currently **enabled** for South Africa (schema.org remains disabled). See below for how to point at a new circular.
+
+Known limitation: the rule-based intent parser matches known roles and skills; arbitrary domain words such as "aerospace" are not automatically treated as keyword/skill filters unless the user edits the query.
 
 ## Setup
 
@@ -56,14 +58,34 @@ Each result shows its match score, a line-by-line explanation, and the source li
 - `config/regions/za.json` — the only place with region facts (currency, locations + aliases, skills dictionary, enabled sources). A second country = a new JSON file, no code changes.
 - `config.py` — paths and env vars: `OLLAMA_HOST`, `TASK_MASTER_MODEL`, `TASK_MASTER_REGION`, `TASK_MASTER_LLM_OFFLINE`.
 
-## Enabling live job sources (next milestone step)
-
-When the offline pipeline passes its tests to your satisfaction, enable sources one at a time in `config/regions/za.json`:
-
-1. `dpsa_circular` — set `url` to the current week's DPSA Public Service Vacancy Circular PDF link, set `enabled: true`.
-2. `schemaorg` — set `search_url` to a job-board search page that embeds schema.org JobPosting JSON-LD (e.g. a za.indeed.com search URL), set `enabled: true`.
+## Live job sources
 
 Each source is behind the same `JobSource` interface (`sources/base.py`) with its own tests, so a board changing its markup only breaks that one adapter.
+
+### dpsa_circular (enabled)
+
+The DPSA Public Service Vacancy Circular is currently **enabled** for South Africa and points to **Circular 27 of 2026**:
+
+```
+https://www.dpsa.gov.za/dpsa2g/documents/vacancies/2026/PSV%20CIRCULAR%2027%20of%202026.pdf
+```
+
+When a new circular is published, update `config/regions/za.json`:
+
+- replace the `url` value with the new circular's PDF link,
+- keep `"enabled": true`,
+- preserve `"default_company": "DPSA / Government"`.
+
+Robustness:
+
+- Downloads use a **20-second HTTP timeout**; HTTP 4xx/5xx and network failures surface as per-source errors.
+- A download/HTTP/PDF failure is **isolated to that source** and does not abort the rest of the search (`agent/search.py` catches `JobSourceError` per source).
+- Tests use local fixtures and mocks and **never fetch the live DPSA PDF**.
+- Salary handling is conservative: annual salaries are converted to monthly where appropriate; hourly or missing salaries are left unset rather than invented; multi-grade salary extraction keeps the entry (lowest) grade.
+
+### schemaorg (disabled)
+
+Not yet enabled. Set `search_url` to a job-board search page that embeds schema.org JobPosting JSON-LD (e.g. a za.indeed.com search URL), then set `enabled: true`.
 
 ## Tests
 
