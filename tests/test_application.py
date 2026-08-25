@@ -6,6 +6,7 @@ import uuid
 import pytest
 
 from application.models import Application, ApplicationStatus, DocumentStatus, MissingInfo
+from application.answer_engine import AnswerType
 from application.question_engine import AnswerStore, QuestionEngine
 from application.cover_letter import CoverLetterGenerator, _build_candidate_summary
 from application.form_filler import (
@@ -24,6 +25,16 @@ from application.tracker import ApplicationTracker
 from application.scoring import application_priority_score, compute_all_scores, rank_applications
 from candidate.profile import CandidateProfile, Education, Experience, Certification, Project, KnownField, KnowledgeStatus
 from sources.base import Job
+import config
+
+
+@pytest.fixture(autouse=True)
+def _isolated_answer_store(tmp_path, monkeypatch):
+    """Tests must never see the real data/answers.json: live app usage writes
+    genuine verified answers there (work auth, disability, experience...),
+    which would flip these engines' expected 'missing' outcomes."""
+    monkeypatch.setattr(config, "ANSWERS_FILE", tmp_path / "answers.json")
+    monkeypatch.setattr(config, "ANSWER_CONFLICTS_FILE", tmp_path / "conflicts.json")
 
 
 # ---------------------------------------------------------------------------
@@ -170,16 +181,16 @@ def test_rank_applications():
 # Question engine tests
 # ---------------------------------------------------------------------------
 
-def test_answer_store_basic():
-    store = AnswerStore()
+def test_answer_store_basic(tmp_path):
+    store = AnswerStore(tmp_path / "answers.json")
     assert store.has("test") is False
     store.set("test", "yes")
     assert store.has("test") is True
     assert store.get("test") == "yes"
 
 
-def test_answer_store_bulk_set():
-    store = AnswerStore()
+def test_answer_store_bulk_set(tmp_path):
+    store = AnswerStore(tmp_path / "answers.json")
     store.bulk_set({"a": "1", "b": "2"})
     assert store.get("a") == "1"
     assert store.get("b") == "2"
@@ -198,57 +209,87 @@ def test_question_engine_profile_lookup_qualification():
     profile = CandidateProfile(
         education=[Education(qualification="BSc", field="Computer Science")]
     )
-    entry = {"question": "Highest qualification?", "field_key": "highest_qualification", "profile_lookup": "qualification"}
-    answer, needs_input = engine.answer_question(entry, profile)
-    assert answer == "BSc Computer Science"
-    assert needs_input is False
+    result = engine.answer("Highest qualification?", profile)
+    assert result.is_answered
+    assert result.answer == "BSc Computer Science"
+    assert result.needs_user is False
+    assert result.answer_type == AnswerType.VERIFIED
 
 
-def test_question_engine_profile_lookup_experience():
+def test_question_engine_profile_lookup_experience_needs_dates():
+    """Experience length is derived from employment dates — never fabricated
+    by counting CV entries."""
     engine = QuestionEngine()
     profile = CandidateProfile(
         experience=[Experience(title="Dev", company="Co")]
     )
-    entry = {"question": "Years of experience?", "field_key": "years_experience", "profile_lookup": "years_experience"}
-    answer, needs_input = engine.answer_question(entry, profile)
-    assert answer == "1"
-    assert needs_input is False
+    result = engine.answer("Years of experience?", profile)
+    assert result.answer is None
+    assert result.needs_user is True
 
 
-def test_question_engine_profile_lookup_unknown():
+def test_question_engine_derives_experience_from_dates():
     engine = QuestionEngine()
+    profile = CandidateProfile(
+        experience=[
+            Experience(
+                title="Intern", company="Co",
+                start_date="2025-01-01", end_date="2025-04-01",
+                experience_type="employment",
+            ),
+            Experience(
+                title="Developer", company="Co2",
+                start_date="2025-05-01", end_date="2025-11-01",
+                experience_type="employment",
+            ),
+        ]
+    )
+    result = engine.answer("How many months of professional software development experience do you have?", profile)
+    assert result.is_answered
+    assert result.answer_type == AnswerType.DERIVED
+    assert "9" in result.answer  # 3 + 6 months calculated from actual history
+
+
+def test_question_engine_profile_lookup_unknown(tmp_path):
+    engine = QuestionEngine(AnswerStore(tmp_path / "answers.json"))
     profile = CandidateProfile()
-    entry = {"question": "Expected salary?", "field_key": "expected_salary", "profile_lookup": None}
-    answer, needs_input = engine.answer_question(entry, profile)
-    assert answer is None
-    assert needs_input is True
+    result = engine.answer("Expected salary?", profile)
+    assert result.answer is None
+    assert result.needs_user is True
 
 
-def test_question_engine_uses_answer_store():
-    store = AnswerStore()
+def test_question_engine_uses_answer_store(tmp_path):
+    store = AnswerStore(tmp_path / "answers.json")
     store.set("expected_salary", "R25000")
     engine = QuestionEngine(store)
     profile = CandidateProfile()
-    entry = {"question": "Expected salary?", "field_key": "expected_salary", "profile_lookup": None}
-    answer, needs_input = engine.answer_question(entry, profile)
-    assert answer == "R25000"
-    assert needs_input is False
+    result = engine.answer("What are your salary expectations?", profile)
+    assert result.is_answered
+    assert result.answer == "R25000"
+    assert result.needs_user is False
 
 
-def test_resolve_common_questions():
-    engine = QuestionEngine()
+def test_resolve_common_questions(tmp_path):
+    engine = QuestionEngine(AnswerStore(tmp_path / "answers.json"))
     profile = CandidateProfile(
         education=[Education(qualification="Diploma", field="IT")],
-        experience=[Experience(title="Dev", company="Co")],
+        experience=[
+            Experience(
+                title="Dev", company="Co",
+                start_date="2025-01-01", end_date="2025-06-01",
+            ),
+        ],
     )
     answered, missing = engine.resolve_common_questions(profile)
     assert "highest_qualification" in answered
-    assert "years_experience" in answered
     assert any(m.field_key == "expected_salary" for m in missing)
+    # Undated entries must not be counted as fabricated years elsewhere,
+    # but this profile has real dates so experience is derivable.
+    assert "years_experience" in answered
 
 
-def test_resolve_common_questions_no_profile():
-    engine = QuestionEngine()
+def test_resolve_common_questions_no_profile(tmp_path):
+    engine = QuestionEngine(AnswerStore(tmp_path / "answers.json"))
     answered, missing = engine.resolve_common_questions(None)
     assert len(answered) == 0
     assert len(missing) > 0
@@ -280,6 +321,29 @@ def test_cover_letter_no_skills():
     letter = gen.generate(profile, job)
     assert "Test" in letter
     assert "Co" in letter
+
+
+def test_cover_letter_skill_names_professionally_formatted():
+    gen = CoverLetterGenerator()
+    profile = CandidateProfile(
+        name="Lucky Vezi",
+        skills=["java", "c#", "r", "sql", "css", "linux", "mysql", "communication"],
+        education=[Education(qualification="Diploma", field="ICT")],
+    )
+    job = Job(
+        title="Junior Developer",
+        company="DVT",
+        description="Java and SQL development.",
+    )
+    letter = gen.generate(profile, job)
+    assert "Java" in letter
+    assert "C#" in letter
+    assert "SQL" in letter
+    assert "CSS" in letter
+    # the rendered skill list must be professionally capitalised
+    assert "Java, C#, R, SQL, CSS" in letter
+    # no raw lowercase run of skill names may leak through
+    assert "java, c#" not in letter.lower().replace("java, c#, r, sql, css", "")
 
 
 def test_cover_letter_summary_used():

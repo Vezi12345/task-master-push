@@ -55,10 +55,18 @@
     "excel": ["excel"],
     "cloud": ["aws", "azure", "gcp", "cloud"],
     "data science": ["machine learning", "ml", "data science", "statistics"],
-    "finance": ["finance", "financial", "accounting", "bcom", "banking"]
+    "finance": ["finance", "financial", "accounting", "bcom", "banking"],
+    "bookkeeping": ["bookkeeping", "pastel", "sage", "vat", "reconciliations", "payroll"],
+    "office admin": ["ms office", "filing", "typing", "diary management", "data entry", "admin"],
+    "nursing": ["nursing", "patient care", "clinical", "sanc", "ward"],
+    "education": ["teaching", "educator", "curriculum", "lesson planning", "classroom"],
+    "electrical": ["electrical", "wiring", "coc", "maintenance"],
+    "driving": ["code 10", "code 14", "pdp", "deliveries", "driver"],
+    "sales": ["sales", "crm", "targets", "client service"],
+    "hospitality": ["food safety", "housekeeping", "barista", "waiter"],
+    "security": ["psira", "access control", "cctv"]
   },
   "sources": [
-    {"name": "demo", "enabled": true},
     {"name": "dpsa_circular", "enabled": true, "url": "https://www.dpsa.gov.za/dpsa2g/documents/vacancies/2026/PSV%20CIRCULAR%2027%20of%202026.pdf", "default_company": "DPSA / Government"},
     {"name": "schemaorg", "enabled": false, "search_url": "", "note": "Set 'search_url' to a board search page (e.g. a za.indeed.com search URL), then set enabled=true."}
   ]

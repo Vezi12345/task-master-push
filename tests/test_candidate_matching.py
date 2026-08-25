@@ -7,6 +7,7 @@ from candidate.matching import (
 )
 from candidate.profile import CandidateProfile, Education, Experience, Certification, Project
 from sources.base import Job
+from conftest import make_valid_job
 
 
 # ---------------------------------------------------------------------------
@@ -322,7 +323,10 @@ def test_search_still_works_without_cv(monkeypatch):
     from agent.rank import rank_jobs
     from sources.dpsa_circular import DpsaCircularSource
 
-    monkeypatch.setattr(DpsaCircularSource, "search", lambda self, query: [])
+    monkeypatch.setattr(
+        DpsaCircularSource, "search",
+        lambda self, query: [make_valid_job()],
+    )
     region = config.load_region("za")
     query = parse_intent("software engineering jobs", region)
     jobs, messages = search_jobs(query, region)

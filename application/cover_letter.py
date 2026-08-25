@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import re
 from typing import Optional
 
 from candidate.profile import CandidateProfile
+from application.skill_format import format_skill_list
 from sources.base import Job
 
 
@@ -107,7 +109,7 @@ def _build_candidate_summary(profile: CandidateProfile) -> str:
     if profile.professional_summary:
         parts.append(f"Summary: {profile.professional_summary}")
     if profile.skills:
-        parts.append(f"Skills: {', '.join(profile.skills)}")
+        parts.append(f"Skills: {format_skill_list(profile.skills)}")
     if profile.education:
         for edu in profile.education:
             edu_bits = [p for p in (edu.qualification, edu.field, edu.institution) if p]
@@ -138,7 +140,7 @@ def _build_body_paragraph(profile: CandidateProfile, job: Job) -> str:
 
     skills = profile.skills[:5]
     if skills:
-        skill_str = ", ".join(skills)
+        skill_str = format_skill_list(skills)
         return (
             f"With experience in {skill_str}, I am confident in my ability "
             f"to contribute effectively to the {company} team."
@@ -150,17 +152,26 @@ def _build_body_paragraph(profile: CandidateProfile, job: Job) -> str:
     )
 
 
+def _skill_in_job_text(skill: str, job_text: str) -> bool:
+    """Word-boundary match for short skill names so 'r' or 'c' never fire
+    inside ordinary words."""
+    s = skill.strip().lower()
+    if len(s) <= 3:
+        return re.search(r"\b" + re.escape(s) + r"\b", job_text) is not None
+    return s in job_text
+
+
 def _build_skills_paragraph(profile: CandidateProfile, job: Job) -> str:
     if not profile.skills:
         return ""
 
     job_text = f"{job.title} {job.description}".lower()
-    relevant_skills = [s for s in profile.skills if s.lower() in job_text]
+    relevant_skills = [s for s in profile.skills if _skill_in_job_text(s, job_text)]
     if not relevant_skills:
         relevant_skills = profile.skills[:6]
     else:
         relevant_skills = relevant_skills[:6]
-    skill_str = ", ".join(relevant_skills)
+    skill_str = format_skill_list(relevant_skills)
 
     if profile.experience:
         years = len(profile.experience)

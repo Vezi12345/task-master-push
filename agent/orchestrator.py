@@ -1,5 +1,6 @@
 ﻿from __future__ import annotations
 
+import re
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
@@ -25,6 +26,12 @@ from agent.parse_intent import JobQuery, UserIntent, parse_user_intent
 from agent.rank import RankedJob, rank_jobs
 from agent.search import search_jobs
 from sources.base import Job
+
+_SEARCH_VERB_RE = re.compile(
+    r"\b(find|search|look(?:ing)? for|show me|hunt|hiring|vacanc\w*|jobs?|"
+    r"positions?|openings?|internship|graduate|apply)\b",
+    re.IGNORECASE,
+)
 
 
 class AgentState(str, Enum):
@@ -113,6 +120,8 @@ class JobApplicationAgent:
         return msg
 
     def process_input(self, user_input: str) -> AgentResult:
+        # each conversational turn stands alone: never replay earlier turns
+        self.messages = []
         self.state = AgentState.RECEIVED
         self._msg(user_input, "user_input")
 
@@ -131,6 +140,18 @@ class JobApplicationAgent:
         if intent.intent_type == "apply":
             return self._handle_apply(intent)
         if intent.intent_type == "search":
+            query = intent.search_query
+            message_text = intent.message or ""
+            looks_like_search = bool(
+                query is not None and (query.roles or query.skills)
+            ) or bool(_SEARCH_VERB_RE.search(message_text))
+            if not looks_like_search:
+                return AgentResult(
+                    state=self.state,
+                    messages=list(self.messages),
+                    profile=self.profile,
+                    error="I didn't understand that. Try searching for jobs or managing applications.",
+                )
             return self._handle_search(intent)
 
         return AgentResult(
@@ -163,7 +184,10 @@ class JobApplicationAgent:
         self.state = AgentState.RANKING
         ranked = rank_jobs(jobs, query, self.llm)
         self.last_ranked = ranked
-        self._msg(f"{len(ranked)} jobs match after filtering.")
+        if ranked:
+            self._msg(f"{len(ranked)} jobs match after filtering.")
+        else:
+            self._msg("No relevant real jobs were found for this search.")
 
         matched = []
         if self.profile is not None:
@@ -213,6 +237,18 @@ class JobApplicationAgent:
 
         self.state = AgentState.RANKING
         ranked = rank_jobs(jobs, query, self.llm)
+        if not ranked:
+            self._msg("No relevant real jobs were found for this search.")
+            return AgentResult(
+                state=AgentState.COMPLETED,
+                messages=list(self.messages),
+                profile=self.profile,
+                query=query,
+                search_messages=search_messages,
+                jobs_found=jobs,
+                ranked=ranked,
+                notes=self._build_notes(),
+            )
 
         self.state = AgentState.MATCHING
         matched = self._match_jobs_to_candidate(ranked)
@@ -523,6 +559,23 @@ class JobApplicationAgent:
 
     def provide_answers(self, answers: dict[str, str]) -> AgentResult:
         self.question_engine.answer_store.bulk_set(answers)
+
+        # Remember answers on the candidate profile so future applications
+        # reuse them even without the answer store.
+        profile = self.profile or load_profile()
+        if profile is not None:
+            question_for_key: dict[str, str] = {}
+            for app in self.pending_applications:
+                for m in app.missing_information:
+                    question_for_key.setdefault(m.field_key, m.question)
+            for key, value in answers.items():
+                if not str(value).strip():
+                    continue
+                profile.set_known(key, str(value), "user")
+                question = question_for_key.get(key)
+                if question:
+                    profile.remember_answer(question, str(value), field_key=key)
+            save_profile(profile)
 
         for app in self.pending_applications:
             if app.status == ApplicationStatus.NEEDS_INFORMATION:

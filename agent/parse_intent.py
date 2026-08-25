@@ -5,6 +5,8 @@ from typing import Optional
 
 from pydantic import BaseModel, Field, ValidationError
 
+from candidate.occupations import OCCUPATIONS
+
 
 class LocationRef(BaseModel):
     city: str
@@ -199,6 +201,34 @@ ROLE_PHRASES: list[tuple[list[str], list[str]]] = [
     ),
 ]
 
+def _registry_role_phrases() -> list[tuple[list[str], list[str]]]:
+    """Derive role triggers from the generic occupation registry.
+
+    Every occupation contributes its label, direct titles, adjacent titles
+    and sector qualification nouns ("nursing", "accounting", ...) as
+    trigger phrases mapping to the occupation label — so any profession in
+    the registry is recognised without hand-coded branches and no
+    profession is privileged by default.
+    """
+    groups: list[tuple[list[str], list[str]]] = []
+    for occ in OCCUPATIONS:
+        triggers: list[str] = [occ.label.lower()]
+        triggers.extend(t for t in occ.titles)
+        triggers.extend(t for t in occ.adjacent)
+        # sector nouns from qualifications ("nursing" → Nurse) but skip
+        # tiny acronyms that would false-match as substrings
+        triggers.extend(
+            q for q in occ.qualifications
+            if len(q) >= 5 or " " in q
+        )
+        unique = list(dict.fromkeys(triggers))
+        unique.sort(key=len, reverse=True)
+        groups.append(([occ.label], unique))
+    return groups
+
+
+_REGISTRY_ROLE_PHRASES = _registry_role_phrases()
+
 MONEY_RE = re.compile(r"(?<!\d)(?:R|r|ZAR)?\s?(\d{1,3}(?:[, ]\d{3})*|\d+)\s?([kK])?")
 
 DISTANCE_RE = re.compile(r"within\s+(\d+)\s*kms?|radius\s+of\s+(\d+)\s*kms?")
@@ -241,6 +271,10 @@ KEYWORD_STOPWORDS = {
 def _consumed_words(region: dict) -> set[str]:
     words: set[str] = set(KEYWORD_STOPWORDS)
     for _, phrases in ROLE_PHRASES:
+        for phrase in phrases:
+            words.update(phrase.split())
+    # registry role vocabulary describes the search target too
+    for _, phrases in _REGISTRY_ROLE_PHRASES:
         for phrase in phrases:
             words.update(phrase.split())
     for markers in (SENIORITY_ENTRY, SENIORITY_MID, SENIORITY_SENIOR):
@@ -316,7 +350,26 @@ def _extract_roles(text: str) -> list[str]:
     for roles, phrases in ROLE_PHRASES:
         if any(phrase in text for phrase in phrases):
             return roles
+    for roles, phrases in _REGISTRY_ROLE_PHRASES:
+        if any(phrase in text for phrase in phrases):
+            return roles
     return []
+
+
+def _matched_role_vocab(text: str) -> set[str]:
+    """Words belonging to whichever role group matched the text.
+
+    These words describe the SEARCH TARGET, never the candidate's skills,
+    so skill extraction must not treat them as evidence of ability.
+    """
+    vocab: set[str] = set()
+    groups = list(ROLE_PHRASES) + list(_REGISTRY_ROLE_PHRASES)
+    for _, phrases in groups:
+        if any(phrase in text for phrase in phrases):
+            for phrase in phrases:
+                vocab.update(phrase.split())
+            break
+    return vocab
 
 
 def _extract_seniority(text: str) -> str:
@@ -329,6 +382,28 @@ def _extract_seniority(text: str) -> str:
     return ""
 
 
+_KEYWORD_STOPWORDS = {
+    "about", "again", "all", "also", "any", "area", "areas", "are", "best",
+    "can", "career", "careers", "could", "find", "for", "from", "good",
+    "great", "has", "have", "hello", "here", "hire", "hiring", "hope",
+    "into", "job", "jobs", "just", "kind", "look", "looking", "lots",
+    "may", "me", "might", "more", "most", "much", "must", "my", "near",
+    "need", "okay", "openings", "opportunit", "over", "please", "plenty",
+    "position", "positions", "really", "role", "roles", "search", "shall",
+    "show", "some", "sort", "thanks", "that", "the", "their", "then",
+    "there", "these", "they", "this", "those", "type", "under", "very",
+    "vacanc", "want", "was", "well", "were", "what", "when", "where",
+    "which", "will", "with", "work", "working", "would", "you", "your",
+}
+
+
+def _is_filler(token: str) -> bool:
+    if token in _KEYWORD_STOPWORDS:
+        return True
+    # partial matches catch prefixed forms like "vacancies" / "opportunities"
+    return any(token.startswith(sw) for sw in ("vacanc", "opportunit"))
+
+
 def _extract_keywords(text: str, region: dict) -> list[str]:
     residue = text.lower()
     for word in _consumed_words(region):
@@ -338,7 +413,7 @@ def _extract_keywords(text: str, region: dict) -> list[str]:
     seen: set[str] = set()
     for token in tokens:
         token = token.strip("-")
-        if len(token) < 3 or token in seen:
+        if len(token) < 3 or token in seen or _is_filler(token):
             continue
         seen.add(token)
         keywords.append(token)
@@ -406,14 +481,35 @@ def _parse_amount(digits: Optional[str], suffix: Optional[str]) -> Optional[int]
 
 
 def _extract_skills(text: str, region: dict) -> list[str]:
+    """Skills the user CLAIMS, never what they are searching for.
+
+    "Find me finance jobs" is a search target ("finance"), not a claimed
+    skill. The matched role group's vocabulary is stripped before
+    dictionary matching so sector nouns in the request cannot masquerade
+    as ability — while genuinely mentioned skills ("using Python")
+    survive untouched.
+    """
+    residue = text.lower()
+    role_vocab = _matched_role_vocab(residue)
+    for word in role_vocab:
+        residue = re.sub(rf"\b{re.escape(word)}\b", " ", residue)
+
     skills: list[str] = []
     for skill, keywords in region.get("skills_dictionary", {}).items():
-        if any(keyword in text for keyword in keywords):
+        if any(keyword in residue for keyword in keywords):
             skills.append(skill)
     for word in ["computer science", "bcom"]:
-        if word in text:
+        if word in residue:
             skills.append(word)
-    return skills
+
+    # final guard: drop anything whose words are all search-target vocab
+    cleaned: list[str] = []
+    for skill in skills:
+        tokens = {t for t in re.findall(r"[a-z0-9+#]+", skill)}
+        if tokens and tokens <= role_vocab:
+            continue
+        cleaned.append(skill)
+    return cleaned
 
 
 def _normalize(query: JobQuery, region: dict) -> JobQuery:

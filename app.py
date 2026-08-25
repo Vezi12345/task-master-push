@@ -13,6 +13,7 @@ from agent.rank import RankedJob
 from sources.base import Job
 from candidate.cv_parser import CvExtractionError, extract_pdf_text, parse_cv
 from candidate.matching import assess_readiness, match_candidate_to_job, match_candidate_to_job_detailed
+from candidate.profile import CandidateProfile, Project
 from candidate.storage import load_profile, save_profile
 from application.models import ApplicationStatus
 
@@ -28,18 +29,15 @@ def index():
     return render_template("index.html")
 
 
-@app.route("/api/search", methods=["POST"])
-def api_search():
-    data = request.get_json(force=True)
-    prompt = data.get("query", "").strip()
-    if not prompt:
-        return jsonify({"error": "Empty query"}), 400
+@app.route("/profile", methods=["GET"])
+def profile_page():
+    return render_template("profile.html")
 
-    result = orchestrator.run_pipeline(prompt, region, llm)
+
+def _serialize_ranked(ranked_items) -> list[dict]:
     profile = load_profile()
-
     ranked = []
-    for idx, item in enumerate(result.ranked):
+    for idx, item in enumerate(ranked_items):
         job = item.job
         entry = {
             "index": idx,
@@ -88,6 +86,21 @@ def api_search():
                 "warnings": readiness.warnings,
             }
         ranked.append(entry)
+    return ranked
+
+
+@app.route("/api/search", methods=["POST"])
+def api_search():
+    data = request.get_json(force=True)
+    prompt = data.get("query", "").strip()
+    if not prompt:
+        return jsonify({"error": "Empty query"}), 400
+
+    result = orchestrator.run_pipeline(prompt, region, llm)
+
+    ranked = _serialize_ranked(result.ranked)
+
+    from agent.candidate_search import summarize_related
 
     return jsonify({
         "query": {
@@ -101,10 +114,12 @@ def api_search():
             "keywords": result.query.keywords,
         },
         "jobs_found": len(result.jobs_found),
+        "filtered_out": len(result.jobs_found) - len(ranked),
+        "related": summarize_related(result.jobs_found) if not ranked else [],
         "ranked": ranked,
         "messages": result.search_messages,
         "notes": result.notes,
-        "has_cv": profile is not None,
+        "has_cv": load_profile() is not None,
     })
 
 
@@ -141,6 +156,9 @@ def api_upload_cv():
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
             file.save(tmp.name)
             text = extract_pdf_text(tmp.name)
+        # keep the real CV file for later uploads to employer forms
+        config.ensure_data_dir()
+        config.CV_FILE.write_bytes(config.Path(tmp.name).read_bytes())
     except CvExtractionError as exc:
         return jsonify({"error": str(exc)}), 400
     except Exception:
@@ -157,8 +175,276 @@ def api_upload_cv():
 def api_profile():
     profile = load_profile()
     if profile is None:
-        return jsonify({"profile": None})
-    return jsonify({"profile": profile.model_dump()})
+        return jsonify({"profile": None, "completion": None})
+    from candidate.completion import compute_completion, high_value_missing
+    data = profile.model_dump()
+    # convenience: pre-split name parts so the UI never guesses
+    data["first_name"] = profile.first_name
+    data["last_name"] = profile.last_name
+    return jsonify({
+        "profile": data,
+        "completion": compute_completion(profile),
+        "missing_prompts": high_value_missing(profile),
+    })
+
+
+@app.route("/api/profile", methods=["PUT"])
+def api_profile_update():
+    """Explicit user updates. This is the ONLY place sensitive/demographic
+    values may be written — they are never inferred anywhere else."""
+    profile = load_profile()
+    if profile is None:
+        profile = CandidateProfile()
+    data = request.get_json(force=True)
+    if not isinstance(data, dict):
+        return jsonify({"error": "JSON object expected"}), 400
+
+    scalar_fields = {
+        f for f in CandidateProfile.model_fields
+        if f not in _PROFILE_LIST_FIELDS
+    }
+    updated = []
+    for key, value in data.items():
+        if key not in scalar_fields:
+            continue  # lists/nested sections go through dedicated endpoints
+        current_type = type(getattr(profile, key, ""))
+        try:
+            setattr(profile, key, value)
+        except (ValueError, TypeError):
+            return jsonify({"error": f"Invalid value for {key}"}), 400
+        # keep known_fields in sync so the answer engine sees it immediately
+        profile.set_known(key, str(value), "user")
+        updated.append(key)
+
+    if not updated:
+        return jsonify({"error": "No updatable fields provided"}), 400
+    save_profile(profile)
+    return jsonify({"ok": True, "updated": sorted(updated)})
+
+
+_PROFILE_LIST_FIELDS = {
+    "skills", "skill_details", "education", "experience", "certifications",
+    "projects", "achievements", "languages", "documents", "question_memory",
+    "known_fields", "preferred_locations", "preferred_roles", "employment_types",
+}
+
+
+@app.route("/api/profile/completion", methods=["GET"])
+def api_profile_completion():
+    profile = load_profile()
+    if profile is None:
+        return jsonify({"completion": {"overall": 0, "sections": {}}})
+    from candidate.completion import compute_completion, high_value_missing
+    return jsonify({
+        "completion": compute_completion(profile),
+        "missing_prompts": high_value_missing(profile),
+    })
+
+
+@app.route("/api/profile/projects", methods=["GET"])
+def api_projects_list():
+    profile = load_profile()
+    projects = profile.projects if profile else []
+    return jsonify({"projects": [p.model_dump() for p in projects]})
+
+
+@app.route("/api/profile/projects", methods=["POST"])
+def api_project_add():
+    profile = load_profile()
+    if profile is None:
+        profile = CandidateProfile()
+    data = request.get_json(force=True) or {}
+    name = (data.get("name") or "").strip()
+    description = (data.get("description") or "").strip()
+    if not name and not description:
+        return jsonify({"error": "Project needs a name or description"}), 400
+    tech_raw = data.get("technologies") or ""
+    technologies = (
+        [t.strip() for t in tech_raw.split(",") if t.strip()]
+        if isinstance(tech_raw, str) else [str(t).strip() for t in tech_raw]
+    )
+    project = Project(
+        name=name, description=description,
+        technologies=technologies,
+        url=(data.get("url") or "").strip(),
+        github_url=(data.get("github_url") or "").strip(),
+        role=(data.get("role") or "").strip(),
+        achievements=[a.strip() for a in (data.get("achievements") or [])
+                      if str(a).strip()],
+        is_personal=bool(data.get("is_personal")),
+        is_academic=bool(data.get("is_academic")),
+        is_work_related=bool(data.get("is_work_related")),
+    )
+    profile.projects.append(project)
+    save_profile(profile)
+    return jsonify({"ok": True, "project": project.model_dump(),
+                    "index": len(profile.projects) - 1})
+
+
+@app.route("/api/profile/projects/<int:index>", methods=["PUT"])
+def api_project_update(index: int):
+    profile = load_profile()
+    if profile is None or not (0 <= index < len(profile.projects)):
+        return jsonify({"error": "Project not found"}), 404
+    data = request.get_json(force=True) or {}
+    project = profile.projects[index]
+    for key in ("name", "description", "url", "github_url", "role"):
+        if key in data:
+            setattr(project, key, str(data[key]).strip())
+    if "technologies" in data:
+        raw = data["technologies"]
+        project.technologies = (
+            [t.strip() for t in raw.split(",") if t.strip()]
+            if isinstance(raw, str) else [str(t).strip() for t in raw]
+        )
+    for flag in ("is_personal", "is_academic", "is_work_related"):
+        if flag in data:
+            setattr(project, flag, bool(data[flag]))
+    save_profile(profile)
+    return jsonify({"ok": True, "project": project.model_dump()})
+
+
+@app.route("/api/profile/answers", methods=["GET"])
+def api_answers_list():
+    profile = load_profile()
+    answers = profile.question_memory if profile else []
+    return jsonify({
+        "answers": [
+            {
+                "question": a.question,
+                "answer": a.answer,
+                "field_key": a.field_key,
+                "confidence": a.confidence,
+                "evidence": a.evidence,
+                "updated_at": a.updated_at,
+            }
+            for a in answers
+        ]
+    })
+
+
+@app.route("/api/profile/answers", methods=["POST"])
+def api_answer_save():
+    """Store an application question + the user's answer. If it maps to a
+    canonical profile field AND the user ticked 'save to my profile', the
+    canonical field itself is updated too."""
+    profile = load_profile()
+    if profile is None:
+        profile = CandidateProfile()
+    data = request.get_json(force=True) or {}
+    question = (data.get("question") or "").strip()
+    answer = (data.get("answer") or "").strip()
+    if not question or not answer:
+        return jsonify({"error": "question and answer are required"}), 400
+    field_key = (data.get("field_key") or "").strip()
+    confidence = data.get("confidence") or "high"
+    evidence = (data.get("evidence") or "").strip()
+
+    profile.remember_answer(
+        question, answer, field_key=field_key,
+        source="user", confidence=confidence, evidence=evidence,
+    )
+    saved_to_profile = False
+    if data.get("save_to_profile") and field_key:
+        stored = profile.get_known_value(field_key)
+        if stored != answer:
+            saved_to_profile = True
+        profile.set_known(field_key, answer, "user")
+        # mirror into structured attributes where they exist
+        attr_map = {
+            "expected_salary": "expected_salary",
+            "notice_period": "notice_period",
+            "drivers_licence": "drivers_licence",
+            "location": "location",
+        }
+        attr = attr_map.get(field_key)
+        if attr and hasattr(profile, attr):
+            setattr(profile, attr, answer)
+    save_profile(profile)
+    return jsonify({"ok": True, "saved_to_profile": saved_to_profile})
+
+
+@app.route("/api/profile/online-profiles", methods=["POST"])
+def api_online_profiles():
+    """Verified URLs only. Values that are not http(s) URLs are rejected —
+    links are never guessed and never filled with names."""
+    profile = load_profile()
+    if profile is None:
+        profile = CandidateProfile()
+    data = request.get_json(force=True) or {}
+    updated = []
+    for key in ("website", "linkedin", "github", "portfolio"):
+        if key not in data:
+            continue
+        value = str(data[key]).strip()
+        if value and not value.lower().startswith(("http://", "https://")):
+            return jsonify({
+                "error": f"{key} must be a full URL starting with https:// "
+                         "(links are stored verbatim, never guessed)"
+            }), 400
+        setattr(profile.online_profiles, key, value)
+        if value:
+            profile.set_known(f"online_{key}", value, "user")
+        updated.append(key)
+    if not updated:
+        return jsonify({"error": "No link fields provided"}), 400
+    save_profile(profile)
+    return jsonify({"ok": True, "updated": sorted(updated)})
+
+
+@app.route("/api/profile/high-school", methods=["POST"])
+def api_high_school():
+    """Explicit user-supplied high-school record — nothing here is inferred."""
+    from candidate.profile import HighSchoolRecord
+    profile = load_profile()
+    if profile is None:
+        profile = CandidateProfile()
+    data = request.get_json(force=True) or {}
+    current = profile.high_school.model_dump() if profile.high_school else {}
+    allowed = {
+        "school", "province", "country", "completion_year",
+        "mathematics_result", "mathematics_grade", "native_language",
+        "native_language_result", "overall_result", "scoring_system",
+    }
+    merged = {**current}
+    for key, value in data.items():
+        if key in allowed:
+            merged[key] = str(value).strip()
+    profile.high_school = HighSchoolRecord(**merged)
+    save_profile(profile)
+    return jsonify({"ok": True, "high_school": profile.high_school.model_dump()})
+
+
+@app.route("/api/profile/education/<int:index>/result", methods=["POST"])
+def api_education_result(index: int):
+    """Store the ACADEMIC RESULT separately from the qualification name."""
+    profile = load_profile()
+    if profile is None or not (0 <= index < len(profile.education)):
+        return jsonify({"error": "Education record not found"}), 404
+    data = request.get_json(force=True) or {}
+    edu = profile.education[index]
+    result = str(data.get("result", "")).strip()
+    if not result:
+        return jsonify({"error": "result is required"}), 400
+    edu.result = result
+    if data.get("grading_system"):
+        edu.grading_system = str(data["grading_system"]).strip()
+    # keep the engine's known_fields in sync (qualification != result!)
+    profile.set_known("education_result", result, "user")
+    save_profile(profile)
+    return jsonify({"ok": True, "education": edu.model_dump()})
+
+
+@app.route("/api/profile/missing", methods=["GET"])
+def api_profile_missing():
+    profile = load_profile()
+    if profile is None:
+        return jsonify({"missing_prompts": [], "overall": 0})
+    from candidate.completion import high_value_missing, compute_completion
+    return jsonify({
+        "missing_prompts": high_value_missing(profile),
+        "overall": compute_completion(profile)["overall"],
+    })
 
 
 @app.route("/api/agent", methods=["POST"])
@@ -398,6 +684,371 @@ def api_cancel_application(app_id):
     return jsonify({"ok": True, "application": app_obj.to_preview()})
 
 
+# ---------------------------------------------------------------------------
+# Real-application submission pipeline (review → confirm → submit → confirm email)
+# ---------------------------------------------------------------------------
+
+def _get_app_or_none(app_id):
+    from application.tracker import ApplicationTracker
+    tracker = ApplicationTracker()
+    app_obj = tracker.get(app_id) or tracker.find_by_partial_id(app_id)
+    return tracker, app_obj
+
+
+def _submission_service():
+    from application.submission import ApplicationAutomationService
+    cv_path = config.CV_FILE if config.CV_FILE.exists() else None
+    letter_path = config.COVER_LETTER_FILE if config.COVER_LETTER_FILE.exists() else None
+    return ApplicationAutomationService(cv_path=cv_path, cover_letter_path=letter_path, llm=llm)
+
+
+def _mailbox_connector():
+    """Email backend chosen by config.resolve_email_backend():
+    gmail_api when an OAuth client secret is present, else IMAP."""
+    if config.resolve_email_backend() == "gmail_api":
+        from application.gmail_api import GmailApiMailboxConnector
+        return GmailApiMailboxConnector()
+    from application.email_confirmation import ImapMailboxConnector
+    return ImapMailboxConnector()
+
+
+@app.route("/applications")
+def applications_page():
+    return render_template("applications.html")
+
+
+@app.route("/api/applications/<app_id>/review", methods=["POST"])
+def api_application_review(app_id):
+    from application.submission import ApplicationAutomationError
+
+    tracker, app_obj = _get_app_or_none(app_id)
+    if not app_obj:
+        return jsonify({"error": "Application not found"}), 404
+    try:
+        review = _submission_service().build_review(app_obj)
+    except ApplicationAutomationError as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify(review.to_dict())
+
+
+@app.route("/api/applications/<app_id>/confirm", methods=["POST"])
+def api_application_confirm(app_id):
+    """EXPLICIT user confirmation gate — nothing is submitted without it."""
+    from application.browser import open_driver
+    from application.models import ApplicationStatus as S
+    from application.submission import (
+        ApplicationAutomationError,
+        BrowserError,
+        BrowserUnavailable,
+    )
+
+    data = request.get_json(force=True) or {}
+    consent_granted = bool(data.get("consent_granted"))
+    user_answers = data.get("answers", {}) or {}
+
+    # "save this answer to my profile" — persist BEFORE the browser flow so
+    # the answers survive even if the browser step fails
+    save_to_profile = data.get("save_to_profile") or []
+    if isinstance(save_to_profile, list) and save_to_profile:
+        profile_for_save = load_profile() or CandidateProfile()
+        from application.answer_engine import classify_question
+        for item in save_to_profile:
+            question = (item.get("question") or "").strip()
+            answer = (item.get("answer") or "").strip()
+            if not question or not answer:
+                continue
+            field_key = (item.get("field_key") or "").strip() \
+                or classify_question(question).field_key
+            profile_for_save.remember_answer(
+                question, answer, field_key=field_key,
+                source="user", confidence="high",
+                evidence="Answered during application review",
+            )
+            if item.get("also_update_profile_field") and field_key:
+                stored = profile_for_save.get_known_value(field_key)
+                if stored != answer:
+                    profile_for_save.set_known(field_key, answer, "user")
+        save_profile(profile_for_save)
+
+    tracker, app_obj = _get_app_or_none(app_id)
+    if not app_obj:
+        return jsonify({"error": "Application not found"}), 404
+    if app_obj.status != S.READY_FOR_REVIEW:
+        return jsonify({
+            "error": f"Application is {app_obj.status.value}, not ready_for_review"
+        }), 400
+
+    profile = load_profile()
+    if profile is None:
+        return jsonify({"error": "Candidate profile not found — upload your CV first"}), 400
+
+    service = _submission_service()
+    driver = open_driver(headless=False)  # visible browser for challenges
+    try:
+        plan = service.reprepare(app_obj, profile, driver)
+        result = service.confirm_and_submit(
+            app_obj, tracker, driver,
+            consent_granted=consent_granted,
+            user_answers=user_answers,
+            plan=plan,
+        )
+    except BrowserUnavailable as exc:
+        app_obj.update_status(S.REQUIRES_USER_ACTION)
+        app_obj.error = str(exc)
+        tracker.update(app_obj)
+        return jsonify({"ok": True, "application": app_obj.to_preview()})
+    except (BrowserError, ApplicationAutomationError) as exc:
+        return jsonify({"error": str(exc)}), 400
+    finally:
+        try:
+            driver.close()
+        except Exception:
+            pass
+    tracker.update(result)
+    return jsonify({"ok": True, "application": result.to_preview()})
+
+
+@app.route("/api/applications/<app_id>/check-confirmation", methods=["POST"])
+def api_application_check_confirmation(app_id):
+    from application.email_confirmation import (
+        MailboxUnavailable,
+        await_confirmation,
+    )
+
+    tracker, app_obj = _get_app_or_none(app_id)
+    if not app_obj:
+        return jsonify({"error": "Application not found"}), 404
+    connector = _mailbox_connector()
+    try:
+        updated = await_confirmation(app_obj, tracker, connector=connector)
+    except MailboxUnavailable as exc:
+        return jsonify({
+            "ok": False,
+            "error": f"Mailbox unreachable: {exc}",
+            "application": app_obj.to_preview(),
+        })
+    return jsonify({"ok": True, "application": updated.to_preview()})
+
+
+@app.route("/api/profile/memory", methods=["GET"])
+def api_profile_memory():
+    """Persistent candidate profile / answer memory with provenance."""
+    from application.profile_memory import ProfileMemoryService
+    return jsonify(ProfileMemoryService().snapshot())
+
+
+@app.route("/api/profile/memory/missing", methods=["GET"])
+def api_profile_memory_missing():
+    from application.profile_memory import ProfileMemoryService
+    return jsonify({"questions": ProfileMemoryService().missing_questions()})
+
+
+@app.route("/api/profile/memory/answer", methods=["POST"])
+def api_profile_memory_answer():
+    """Save a user answer. Returns HTTP 409 + conflict details when it
+    contradicts an existing VERIFIED answer (nothing is overwritten)."""
+    from application.profile_memory import ProfileMemoryService
+    data = request.get_json(force=True) or {}
+    outcome = ProfileMemoryService().save_user_answer(
+        str(data.get("key") or ""), str(data.get("answer") or ""),
+        question=str(data.get("question") or ""),
+    )
+    if not outcome.get("ok"):
+        return jsonify(outcome), 400
+    return jsonify(outcome), (409 if outcome.get("conflict") else 200)
+
+
+@app.route("/api/profile/memory/conflict/<conflict_id>/resolve", methods=["POST"])
+def api_profile_memory_resolve(conflict_id):
+    from application.profile_memory import ProfileMemoryService
+    data = request.get_json(force=True) or {}
+    outcome = ProfileMemoryService().resolve_conflict(
+        conflict_id, str(data.get("choice") or ""),
+    )
+    return jsonify(outcome), (200 if outcome.get("ok") else 400)
+
+
+@app.route("/api/email/status", methods=["GET"])
+def api_email_status():
+    """Which email backend is active and whether it is ready."""
+    from application.email_confirmation import ImapMailboxConnector
+    backend = config.resolve_email_backend()
+    info = {"backend": backend}
+    if backend == "gmail_api":
+        from application.gmail_api import GmailApiMailboxConnector
+        conn = GmailApiMailboxConnector()
+        info.update({
+            "authorized": conn.is_configured(),
+            "client_secret_found": config.GMAIL_CLIENT_SECRET_FILE.exists(),
+            "token_file": str(config.GMAIL_TOKEN_FILE),
+            "connect_hint": "POST /api/email/connect (opens browser) "
+                            "or run: python cli.py gmail-auth",
+        })
+    else:
+        imap = ImapMailboxConnector()
+        info.update({
+            "configured": imap.is_configured(),
+            "host": imap.host,
+            "blocked_note": "IMAP (TCP 993) is blocked on some networks — "
+                            "drop an OAuth client secret into data/ to use "
+                            "the gmail_api backend instead",
+        })
+    return jsonify(info)
+
+
+@app.route("/api/email/connect", methods=["POST"])
+def api_email_connect():
+    """One-time interactive Gmail OAuth consent. Blocks until the browser
+    redirect lands back on the local callback server (max ~5 min)."""
+    if config.resolve_email_backend() != "gmail_api":
+        return jsonify({
+            "error": "gmail_api backend is not active — save the OAuth "
+                     "client-secret JSON to data/gmail_client_secret.json "
+                     "or set TASK_MASTER_EMAIL_BACKEND=gmail_api"
+        }), 400
+    from application.gmail_api import run_authorization_flow
+    try:
+        token = run_authorization_flow()
+    except SystemExit as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify({"ok": True, "email_address": _mailbox_connector().address})
+
+
+# ---------------------------------------------------------------------------
+# autonomous run — the explicit POST below IS the user's consent gate
+# ---------------------------------------------------------------------------
+
+_chat_agent = None
+
+_CHAT_HELP = (
+    "I'm your job-search agent. Here's what you can ask me:\n"
+    "• Search — \"find entry-level software developer jobs in East London\"\n"
+    "• Apply — \"apply to the best 3 matching jobs\" or \"apply where I match at least 80%\"\n"
+    "• Track — \"show my applications\" or \"what needs my attention?\"\n"
+    "• Decide — \"approve all applications\" / \"cancel application <id>\"\n"
+    "• Autopilot — press the Run agent button and I'll search, filter and prepare applications on my own."
+)
+
+
+def _get_chat_agent():
+    global _chat_agent
+    if _chat_agent is None:
+        from agent.orchestrator import JobApplicationAgent
+        _chat_agent = JobApplicationAgent(region, llm)
+    return _chat_agent
+
+
+def _chat_payload(result) -> dict:
+    from agent.candidate_search import summarize_related
+
+    reply_msgs = [
+        m for m in result.messages
+        if m.role == "agent" and m.message_type not in ("user_input",)
+    ]
+    reply = "\n".join(m.content for m in reply_msgs).strip()
+    state_value = result.state.value if hasattr(result.state, "value") else str(result.state)
+
+    payload = {
+        "state": state_value,
+        "reply": reply,
+        "error": result.error,
+        "has_cv": result.profile is not None,
+        "awaiting_approval": state_value == "awaiting_approval",
+        "needs_answers": bool(result.missing_information),
+        "missing_information": [
+            {"field_key": m.field_key, "question": m.question}
+            for m in result.missing_information
+        ],
+        "applications": [a.to_preview() for a in result.applications],
+        "application_summaries": result.application_summaries,
+    }
+
+    if result.ranked or result.jobs_found:
+        ranked = _serialize_ranked(result.ranked)
+        payload.update({
+            "jobs_found": len(result.jobs_found),
+            "filtered_out": len(result.jobs_found) - len(ranked),
+            "related": summarize_related(result.jobs_found) if not ranked else [],
+            "ranked": ranked,
+            "notes": result.notes,
+        })
+    return payload
+
+
+@app.route("/api/chat", methods=["POST"])
+def api_chat():
+    """Conversational endpoint: one user turn in, one structured agent turn out."""
+    data = request.get_json(force=True, silent=True) or {}
+    message = (data.get("message") or "").strip()
+    if not message:
+        return jsonify({"error": "Empty message"}), 400
+
+    agent_obj = _get_chat_agent()
+    try:
+        result = agent_obj.process_input(message)
+    except Exception as exc:
+        return jsonify({
+            "state": "failed",
+            "reply": f"Something went wrong handling that: {exc}",
+            "error": str(exc),
+        }), 500
+
+    payload = _chat_payload(result)
+    if payload["error"]:
+        base = payload["reply"] or payload["error"]
+        payload["reply"] = f"{base}\n\n{_CHAT_HELP}"
+    elif not payload["reply"]:
+        payload["reply"] = _CHAT_HELP
+    return jsonify(payload)
+
+
+@app.route("/api/chat/answers", methods=["POST"])
+def api_chat_answers():
+    """Answer outstanding agent questions mid-conversation."""
+    data = request.get_json(force=True, silent=True) or {}
+    answers = data.get("answers")
+    if not isinstance(answers, dict) or not answers:
+        return jsonify({"error": "No answers provided"}), 400
+
+    agent_obj = _get_chat_agent()
+    result = agent_obj.provide_answers({str(k): str(v) for k, v in answers.items()})
+    return jsonify(_chat_payload(result))
+
+
+@app.route("/api/autonomous/run", methods=["POST"])
+def api_autonomous_run():
+    """Start one autonomous search→apply run. Started ONLY by an explicit
+    user action; the request body may carry a free-text query and dry_run."""
+    from application.autonomy import AutonomyPolicy, run_autonomous_job_search
+    data = request.get_json(force=True, silent=True) or {}
+    try:
+        policy = None
+        if data.get("min_score") is not None:
+            policy = AutonomyPolicy(min_score=max(0, min(100, int(data["min_score"]))))
+        report = run_autonomous_job_search(
+            query_text=(data.get("query") or "").strip(),
+            dry_run=bool(data.get("dry_run")),
+            policy=policy,
+        )
+    except Exception as exc:
+        return jsonify({"error": f"Autonomous run failed: {exc}"}), 500
+    return jsonify(report)
+
+
+@app.route("/api/autonomous/report", methods=["GET"])
+def api_autonomous_report():
+    """Latest saved run report (or empty object)."""
+    if not config.AUTONOMOUS_RUNS_DIR.exists():
+        return jsonify({})
+    reports = sorted(config.AUTONOMOUS_RUNS_DIR.glob("run_*.json"))
+    if not reports:
+        return jsonify({})
+    try:
+        return jsonify(json.loads(reports[-1].read_text(encoding="utf-8")))
+    except (json.JSONDecodeError, OSError):
+        return jsonify({})
+
+
 def _load_kept() -> list[dict]:
     if not config.KEPT_JOBS_FILE.exists():
         return []
@@ -408,4 +1059,4 @@ def _load_kept() -> list[dict]:
 
 
 if __name__ == "__main__":
-    app.run(debug=True, port=5000)
+    app.run(debug=True, port=5000, threaded=True)

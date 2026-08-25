@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Task Master — Applications</title>
+  <link rel="stylesheet" href="/static/css/app.css"/>
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="/">Task <span>Master</span></a>
+  <nav>
+    <a href="/">Job search</a>
+    <a href="/applications" class="active">Applications</a>
+    <a href="/profile">My Profile</a>
+  </nav>
+</header>
+<main class="page" id="list"><p class="muted">Loading applications…</p></main>
+
+<div class="modal-bg" id="modalBg">
+  <div class="modal" id="modal"></div>
+</div>
+
+<script>
+const list = document.getElementById("list");
+const modalBg = document.getElementById("modalBg");
+const modal = document.getElementById("modal");
+
+// which statuses mean "you need to do something"
+const ACTION_STATUSES = new Set([
+  "ready_for_review", "requires_user_action", "needs_information",
+  "manual_action_required", "email_review_required",
+]);
+const BADGE_CLASS = {
+  confirmed: "b-green", submitted: "b-green", offer: "b-green", interview: "b-green",
+  awaiting_confirmation: "b-blue",
+  ready_for_review: "b-yellow", requires_user_action: "b-yellow",
+  needs_information: "b-yellow", manual_action_required: "b-yellow",
+  email_review_required: "b-yellow", preparing: "b-yellow", submitting: "b-yellow",
+  failed: "b-red", blocked: "b-red", rejected: "b-red",
+};
+const FILTER_OPTIONS = [
+  ["all", "All statuses"],
+  ["action", "Needs your action"],
+  ["ready_for_review", "Ready for review"],
+  ["awaiting_confirmation", "Awaiting confirmation"],
+  ["email_review_required", "Email needs review"],
+  ["submitted", "Submitted"],
+  ["confirmed", "Confirmed"],
+  ["requires_user_action", "Requires user action"],
+  ["needs_information", "Needs information"],
+  ["manual_action_required", "Manual action required"],
+  ["failed", "Failed"],
+];
+let APPS = [];
+let FILTER = { status: "all", q: "" };
+
+async function load() {
+  const res = await fetch("/api/applications");
+  const data = await res.json();
+  APPS = data.applications || [];
+  list.innerHTML = "";
+  list.appendChild(await autonomySection());
+  list.appendChild(dashboard(data.summary || {}));
+  list.appendChild(filterBar());
+  const feed = document.createElement("div");
+  feed.id = "feed";
+  list.appendChild(feed);
+  renderFeed();
+}
+
+// ---- autonomous run ----------------------------------------------------
+async function autonomySection() {
+  const el = document.createElement("div");
+  el.className = "card";
+  let latest = {};
+  try { latest = await (await fetch("/api/autonomous/report")).json(); } catch {}
+  const apps = latest.applications || [];
+  const skipped = latest.skipped || [];
+  const fmt = ts => ts ? new Date(ts).toLocaleString() : "";
+  el.innerHTML = `
+    <h3>Autonomous job search</h3>
+    <p class="muted">Task Master searches, scores jobs against your profile, applies to the best matches within your limits, then verifies confirmation emails. You start each run explicitly.</p>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+      <input type="text" id="autoQuery" placeholder="Optional: what to search for (blank = use your profile preferences)" style="flex:1;min-width:220px"/>
+      <button class="btn-primary" onclick="startRun(false)">Start run</button>
+      <button onclick="startRun(true)">Dry run (no applying)</button>
+    </div>
+    <div id="runStatus" class="muted" style="margin-top:6px"></div>
+    ${latest.started_at ? `
+      <details style="margin-top:10px" open>
+        <summary style="cursor:pointer;font-weight:600">Last run — ${fmt(latest.started_at)} (threshold ${latest.threshold}%)</summary>
+        ${apps.length ? `<table>${apps.map(a => `
+          <tr><td><strong>${esc(a.company)}</strong> — ${esc(a.title)}<br/>
+            <span class="muted">${esc(a.reason || "")}</span></td>
+          <td>${a.score}%</td>
+          <td>${outcomeBadge(a.outcome)}</td></tr>`).join("")}</table>` : ""}
+        ${skipped.length ? `<p class="muted" style="margin:10px 0 2px"><strong>Why skipped:</strong></p>
+          <table>${skipped.map(s => `
+            <tr><td>${esc(s.company)} — ${esc(s.title)}</td>
+            <td>${s.score}%</td>
+            <td class="muted">${esc(s.reason)}</td></tr>`).join("")}</table>` : ""}
+        ${latest.summary ? `<pre style="margin-top:8px">${esc(latest.summary)}</pre>` : ""}
+      </details>` : `<p class="muted" style="margin-top:8px">No runs yet.</p>`}`;
+  return el;
+}
+
+function outcomeBadge(outcome) {
+  const map = {
+    submitted: ["b-green", "SUBMITTED"], confirmed: ["b-green", "CONFIRMED"],
+    awaiting_confirmation: ["b-blue", "AWAITING CONFIRMATION"],
+    requires_user_action: ["b-yellow", "REQUIRES USER INPUT"],
+    failed: ["b-red", "FAILED"], dry_run: ["b-gray", "DRY RUN"],
+  };
+  const [cls, label] = map[outcome] || ["b-gray", outcome];
+  return `<span class="badge ${cls}">${esc(label)}</span>`;
+}
+
+async function startRun(dry) {
+  if (!dry && !confirm("Start an autonomous run?\n\nTask Master will APPLY to suitable jobs automatically (within your limits), using your saved profile answers.")) return;
+  const status = document.getElementById("runStatus");
+  const btns = document.querySelectorAll("#list .card button");
+  btns.forEach(b => b.disabled = true);
+  status.textContent = "Running… this can take a few minutes.";
+  try {
+    const res = await fetch("/api/autonomous/run", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({query: document.getElementById("autoQuery").value.trim(), dry_run: dry}),
+    });
+    const r = await res.json();
+    status.textContent = r.error ? ("⚠ " + r.error) : "Run complete — see report below. Reloading…";
+  } catch (err) {
+    status.textContent = "⚠ Run failed: " + err.message;
+  } finally {
+    btns.forEach(b => b.disabled = false);
+    if (!status.textContent.startsWith("⚠")) setTimeout(load, 800);
+  }
+}
+
+function matches(a) {
+  if (FILTER.status === "action") {
+    if (!ACTION_STATUSES.has(a.status)) return false;
+  } else if (FILTER.status !== "all" && a.status !== FILTER.status) {
+    return false;
+  }
+  if (FILTER.q) {
+    const hay = `${a.company} ${a.role} ${a.application_platform || ""} ${a.application_reference || ""}`.toLowerCase();
+    if (!hay.includes(FILTER.q.toLowerCase())) return false;
+  }
+  return true;
+}
+
+function renderFeed() {
+  const feed = document.getElementById("feed");
+  if (!APPS.length) {
+    feed.innerHTML = "<div class='card'><p class='muted'>No applications yet. Search for jobs and apply.</p></div>";
+    return;
+  }
+  const shown = APPS.filter(matches);
+  if (!shown.length) {
+    feed.innerHTML = "<div class='card'><p class='muted'>No applications match this filter.</p></div>";
+    return;
+  }
+  feed.innerHTML = shown.map(card).join("");
+}
+
+function dashboard(summary) {
+  const by = summary.by_status || {};
+  const count = s => by[s] || 0;
+  const actionCount = APPS.filter(a => ACTION_STATUSES.has(a.status)).length;
+  const waiting = APPS.filter(a => a.status === "awaiting_confirmation").length;
+  const done = APPS.filter(a => ["submitted", "confirmed"].includes(a.status)).length;
+  const failed = APPS.filter(a => ["failed", "blocked"].includes(a.status)).length;
+  const el = document.createElement("div");
+  el.className = "stat-grid";
+  el.innerHTML = `
+    <div class="stat-card stat-accent" data-f="all"><div class="num">${summary.total ?? APPS.length}</div><div class="lbl">Total</div></div>
+    <div class="stat-card stat-warn ${FILTER.status === "action" ? "active" : ""}" data-f="action"><div class="num">${actionCount}</div><div class="lbl">Needs your action</div></div>
+    <div class="stat-card stat-info" data-f="awaiting_confirmation"><div class="num">${waiting}</div><div class="lbl">Awaiting confirmation</div></div>
+    <div class="stat-card stat-ok" data-f="confirmed"><div class="num">${done}</div><div class="lbl">Submitted / confirmed</div></div>
+    <div class="stat-card stat-bad" data-f="failed"><div class="num">${failed}</div><div class="lbl">Failed / blocked</div></div>`;
+  el.querySelectorAll(".stat-card").forEach(c =>
+    c.addEventListener("click", () => setStatusFilter(c.dataset.f)));
+  return el;
+}
+
+function filterBar() {
+  const wrap = document.createElement("div");
+  wrap.className = "filter-bar";
+  wrap.innerHTML = `
+    <select id="statusFilter">
+      ${FILTER_OPTIONS.map(([v, l]) => `<option value="${v}" ${v === FILTER.status ? "selected" : ""}>${l}</option>`).join("")}
+    </select>
+    <input type="text" id="searchFilter" placeholder="Search company, role, platform…" value="${esc(FILTER.q)}"/>`;
+  wrap.querySelector("#statusFilter").addEventListener("change", e => setStatusFilter(e.target.value));
+  let t;
+  wrap.querySelector("#searchFilter").addEventListener("input", e => {
+    clearTimeout(t);
+    t = setTimeout(() => { FILTER.q = e.target.value.trim(); renderFeed(); }, 200);
+  });
+  return wrap;
+}
+
+function setStatusFilter(v) {
+  FILTER.status = v;
+  const sel = document.getElementById("statusFilter");
+  if (sel) sel.value = v;
+  load();
+}
+
+function badgeFor(status) {
+  const cls = BADGE_CLASS[status] || "b-gray";
+  return `<span class="badge ${cls}">${esc(status.replace(/_/g, " "))}</span>`;
+}
+
+function card(a) {
+  return `
+  <div class="card">
+    <h3>${esc(a.company)} — ${esc(a.role)}</h3>
+    ${badgeFor(a.status)}
+    <div class="muted" style="margin-top:6px">
+      ${a.application_url ? `Application page: <a href="${esc(a.application_url)}" target="_blank">${esc(a.application_platform || "link")}</a><br/>` : ""}
+      ${a.application_reference ? `Reference: <strong>${esc(a.application_reference)}</strong><br/>` : ""}
+      ${a.submitted_at ? `Applied: ${new Date(a.submitted_at).toLocaleString()}<br/>` : ""}
+      ${a.confirmation_received_at ? `✓ Confirmation email received` : (a.status === "awaiting_confirmation" ? `○ Confirmation email not received yet` : "")}
+      ${a.error ? `<br/>⚠ ${esc(a.error)}` : ""}
+      ${a.unanswered_required && a.unanswered_required.length ? `<br/>⚠ Needs your input: ${esc(a.unanswered_required.join("; "))}` : ""}
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+      ${a.status === "ready_for_review" ? `<button class="btn-primary" onclick="review('${a.id}')">Review application</button>` : ""}
+      ${["submitted","awaiting_confirmation","email_review_required"].includes(a.status) ? `<button onclick="checkEmail('${a.id}')">Check confirmation email</button>` : ""}
+    </div>
+  </div>`;
+}
+
+async function review(id) {
+  const res = await fetch(`/api/applications/${id}/review`, {method:"POST"});
+  const r = await res.json();
+  if (r.error) return alert(r.error);
+  window._reviewData = r;
+
+  const GROUP_META = {
+    user_verified:    ["✓ Answered by you", "Saved from your profile / earlier applications — reused automatically."],
+    auto_answered:    ["⚙ Automatically answered", "Filled from your CV/profile data."],
+    evidence_based:   ["⚠ Evidence-based drafts", "Derived or AI-drafted from your real evidence — review and edit before submitting."],
+    still_unanswered: ["✗ Still unanswered", "These must be completed — submission stays blocked until they are answered."],
+  };
+  const groups = r.groups || {};
+  const sections = Object.entries(GROUP_META).map(([key, [title, hint]]) => {
+    const rows = (groups[key] || []).map((ans, i) => reviewRow(ans, `${key}_${i}`)).join("");
+    if (!rows) return "";
+    return `
+      <h3 style="margin:18px 0 4px">${title} <span class="muted">(${groups[key].length})</span></h3>
+      <p class="muted" style="margin:0 0 6px">${hint}</p>
+      <table>${rows}</table>`;
+  }).join("");
+
+  const missingCount = (r.unanswered_required || []).length;
+  modal.innerHTML = `
+    <h2>Review before submitting</h2>
+    <p class="muted">
+      <strong>${esc(r.company)}</strong> — ${esc(r.job_title)}<br/>
+      Application URL: <a href="${esc(r.application_url)}" target="_blank">${esc(r.application_url)}</a><br/>
+      You: ${esc(r.candidate_name)} &lt;${esc(r.candidate_email)}&gt;
+    </p>
+    ${(r.warnings || []).map(w => `<p style="color:var(--warn)"><strong>⚠ ${esc(w)}</strong></p>`).join("")}
+    ${missingCount ? `<p style="color:var(--bad);font-weight:700">✗ ${missingCount} required answer(s) still missing — submit stays disabled.</p>` : `<p style="color:var(--ok);font-weight:700">✓ All required answers present.</p>`}
+    ${sections}
+    ${(r.consent_questions || []).map(q => `
+      <label class="consent"><input type="checkbox" id="consentBox"/> I agree: ${esc(q)}</label>`).join("")}
+    ${r.documents.cv_path ? `<p class="muted">CV: ${esc(r.documents.cv_path)}</p>` : ""}
+    <label style="display:block;margin:12px 0;font-weight:600;border-top:1px solid var(--border);padding-top:12px">
+      <input type="checkbox" id="approvalBox" onchange="updateApproval()"/>
+      I have reviewed every answer above, corrected anything wrong, and <strong>explicitly approve</strong> submitting this application.
+    </label>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+      <button id="submitBtn" class="btn-ok" disabled onclick="confirmSubmit('${r.application_id}')">Confirm &amp; submit</button>
+      <button class="btn-danger" onclick="closeModal()">Cancel</button>
+    </div>`;
+  modalBg.style.display = "flex";
+}
+
+function reviewRow(ans, i) {
+  let valueCell;
+  if (ans.conflict && ans.conflict.profile_value) {
+    valueCell = `
+      <div style="color:var(--bad);font-weight:700;margin-bottom:4px">⚠ Conflicting information</div>
+      <label><input type="radio" name="conf_${i}" data-conf-q="${esc(ans.question)}" data-conf-val="${esc(ans.conflict.profile_value)}"/> Profile: ${esc(ans.conflict.profile_value)}</label><br/>
+      <label><input type="radio" name="conf_${i}" data-conf-q="${esc(ans.question)}" data-conf-val="${esc(ans.conflict.remembered_value)}"/> Earlier application: ${esc(ans.conflict.remembered_value)}</label><br/>
+      <input type="text" data-q="${esc(ans.question)}" placeholder="…or type a different answer"/>`;
+  } else if (ans.needs_user || !ans.value) {
+    valueCell = `
+      <input type="text" data-q="${esc(ans.question)}" placeholder="Your answer"/>
+      <label class="muted"><input type="checkbox" class="save-profile-box" data-save-q="${esc(ans.question)}"/> Save this to my profile</label>`;
+  } else if ((ans.answer_type||"").startsWith("generated")) {
+    valueCell = `
+      <textarea data-gen-q="${esc(ans.question)}" rows="4" style="width:100%">${esc(ans.value ?? "")}</textarea>
+      <div class="muted">AI draft from your profile evidence — edit freely.</div>`;
+  } else {
+    valueCell = esc(ans.value ?? "");
+  }
+  return `
+  <tr>
+    <td>${esc(ans.question)}${ans.required ? ' <span style="color:var(--bad)">*</span>' : ""}<br/>
+    <span class="muted">${esc(ans.reason || "")}</span></td>
+    <td>${valueCell}</td>
+    <td><span class="badge b-gray">${ans.answer_type || ""}</span></td>
+  </tr>`;
+}
+
+function updateApproval() {
+  const box = document.getElementById("approvalBox");
+  const btn = document.getElementById("submitBtn");
+  btn.disabled = !(box && box.checked);
+}
+
+async function confirmSubmit(id) {
+  // hard gate — never submit without the explicit approval checkbox
+  const approval = document.getElementById("approvalBox");
+  if (!approval || !approval.checked) return;
+  const consent = document.getElementById("consentBox");
+  const answers = {};
+  const saveToProfile = [];
+  modal.querySelectorAll("input[data-q]").forEach(inp => {
+    if (inp.value.trim()) answers[inp.dataset.q] = inp.value.trim();
+  });
+  // conflict radios override the free-text when chosen
+  modal.querySelectorAll("input[data-conf-q]:checked").forEach(rad => {
+    answers[rad.dataset.confQ] = rad.dataset.confVal;
+  });
+  // edited generated drafts become user answers
+  modal.querySelectorAll("textarea[data-gen-q]").forEach(t => {
+    if (t.value.trim() && t.value.trim() !== t.defaultValue.trim())
+      answers[t.dataset.genQ] = t.value.trim();
+  });
+  // explicit opt-in: remember these answers for future applications
+  modal.querySelectorAll(".save-profile-box:checked").forEach(cb => {
+    const q = cb.dataset.saveQ;
+    const a = answers[q];
+    if (a) saveToProfile.push({question: q, answer: a, also_update_profile_field: true});
+  });
+  const body = {
+    consent_granted: consent ? consent.checked : true,
+    answers,
+    save_to_profile: saveToProfile,
+  };
+  const res = await fetch(`/api/applications/${id}/confirm`, {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(body),
+  });
+  const data = await res.json();
+  closeModal();
+  if (data.error) alert(data.error);
+  else if (data.application && data.application.status === "submitted")
+    alert("Application submitted.\n\nConfirmation: " + (data.application.confirmation_text || ""));
+  else if (data.application)
+    alert("Not submitted — status: " + data.application.status + "\n" + (data.application.error || ""));
+  load();
+}
+
+async function checkEmail(id) {
+  const res = await fetch(`/api/applications/${id}/check-confirmation`, {method:"POST"});
+  const data = await res.json();
+  if (data.error) return alert(data.error);
+  const a = data.application;
+  alert(
+    a.status === "confirmed" ? "✓ Confirmation email verified." :
+    a.status === "email_review_required" ? "⚠ Ambiguous email — manual review needed:\n" + a.error :
+    "○ No confirmation email found yet."
+  );
+  load();
+}
+
+function closeModal() { modalBg.style.display = "none"; }
+function esc(s) { return String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+modalBg.addEventListener("click", e => { if (e.target === modalBg) closeModal(); });
+load();
+</script>
+</body>
+</html>

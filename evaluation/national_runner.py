@@ -36,8 +36,8 @@ from agent.rank import RankedJob, rank_jobs
 from agent.search import dedupe_jobs
 from config import load_region
 from sources.base import Job
-from sources.demo import DemoSource
 
+from .fixtures import load_fixture_jobs
 from .national_dataset import QUERIES
 
 CORPUS_JSON = Path(__file__).parent / "corpus" / "dpsa" / "dpsa_jobs.json"
@@ -77,8 +77,7 @@ def build_national_corpus() -> list[Job]:
     for job in jobs:
         key = (job.id, job.company) if job.id else (job.title, job.company, job.url)
         seen[key] = job
-    region = load_region("za")
-    demo = DemoSource(region).search(None)
+    demo = load_fixture_jobs()
     return list(seen.values()) + demo
 
 

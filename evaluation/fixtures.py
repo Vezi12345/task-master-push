@@ -1,32 +1,19 @@
 from __future__ import annotations
 
-from .base import Job, JobSource
+"""Offline evaluation-only fixture jobs.
 
+These records exist ONLY to give the offline ranking-quality harnesses
+(``evaluation.runner`` / ``evaluation.national_runner``) a deterministic,
+private-sector slice to measure against. They are NOT part of the live job
+search pipeline: this module is not registered in ``agent.search``'s source
+registry and is never served to users by ``search_jobs``.
+"""
 
-class DemoSource(JobSource):
-    name = "demo"
+from sources.base import Job
 
-    def search(self, query) -> list[Job]:
-        return [_build(job_dict) for job_dict in DEMO_JOBS]
+FIXTURE_SOURCE = "demo"
 
-
-def _build(raw: dict) -> Job:
-    return Job(
-        title=raw["title"],
-        company=raw["company"],
-        location=raw.get("location", ""),
-        remote=raw.get("remote", False),
-        description=raw.get("description", ""),
-        salary_min=raw.get("salary_min"),
-        salary_max=raw.get("salary_max"),
-        salary_text=raw.get("salary_text"),
-        url=raw.get("url", ""),
-        source="demo",
-        posted_date=raw.get("posted_date"),
-    )
-
-
-DEMO_JOBS = [
+_FIXTURE_JOBS = [
     {
         "title": "Junior Software Developer",
         "company": "Luno",
@@ -171,3 +158,40 @@ DEMO_JOBS = [
         "url": "https://www.bytes.co.za/careers",
     },
 ]
+
+FIXTURE_JOBS = [
+    Job(
+        title=raw["title"],
+        company=raw["company"],
+        location=raw.get("location", ""),
+        remote=raw.get("remote", False),
+        description=raw.get("description", ""),
+        salary_min=raw.get("salary_min"),
+        salary_max=raw.get("salary_max"),
+        salary_text=raw.get("salary_text"),
+        url=raw.get("url", ""),
+        source=FIXTURE_SOURCE,
+        posted_date=raw.get("posted_date"),
+    )
+    for raw in _FIXTURE_JOBS
+]
+
+
+def load_fixture_jobs() -> list[Job]:
+    """Return copies of the offline evaluation fixtures."""
+    return [
+        Job(
+            title=j.title,
+            company=j.company,
+            location=j.location,
+            remote=j.remote,
+            description=j.description,
+            salary_min=j.salary_min,
+            salary_max=j.salary_max,
+            salary_text=j.salary_text,
+            url=j.url,
+            source=j.source,
+            posted_date=j.posted_date,
+        )
+        for j in FIXTURE_JOBS
+    ]

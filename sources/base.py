@@ -46,6 +46,7 @@ class Job:
     url: str = ""
     source: str = ""
     posted_date: Optional[str] = None
+    date_found: Optional[str] = None
     platform: ApplicationPlatformType = ApplicationPlatformType.UNKNOWN
     id: str = ""
 

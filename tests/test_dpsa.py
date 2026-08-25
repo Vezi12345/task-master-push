@@ -16,6 +16,14 @@ ANNEXURE = (FIXTURES / "dpsa_circular_annexure.txt").read_text(encoding="utf-8")
 CIRCULAR_URL = "https://example.invalid/circular-14-2026.pdf"
 
 
+@pytest.fixture(autouse=True)
+def _isolated_text_cache(tmp_path, monkeypatch):
+    """Keep the parsed-text cache out of the real data dir for every test."""
+    import sources.dpsa_circular as dpsa
+
+    monkeypatch.setattr(dpsa, "DATA_DIR", tmp_path)
+
+
 def test_parse_circular_extracts_multiple_vacancies():
     jobs = parse_circular(REALISTIC)
     assert len(jobs) == 5
@@ -247,4 +255,67 @@ def test_fetch_success_returns_extracted_text(monkeypatch):
     monkeypatch.setattr("requests.get", lambda *a, **k: _FakeResponse(b"<pdf bytes>"))
     monkeypatch.setattr("pdfplumber.open", _FakePdf)
     source = DpsaCircularSource({"name": "dpsa_circular", "url": CIRCULAR_URL})
+    assert source.fetch_text(CIRCULAR_URL) == REALISTIC
+
+
+def test_fetch_caches_text_and_skips_network_on_second_call(monkeypatch):
+    calls = []
+
+    def fake_get(*a, **k):
+        calls.append(1)
+        return _FakeResponse(b"<pdf bytes>")
+
+    monkeypatch.setattr("requests.get", fake_get)
+    monkeypatch.setattr("pdfplumber.open", _FakePdf)
+    source = DpsaCircularSource({"name": "dpsa_circular", "url": CIRCULAR_URL})
+
+    first = source.fetch_text(CIRCULAR_URL)
+    second = source.fetch_text(CIRCULAR_URL)
+
+    assert first == REALISTIC
+    assert second == REALISTIC
+    assert len(calls) == 1, "second fetch must be served from cache"
+
+
+def test_stale_cache_is_refetched(monkeypatch, tmp_path):
+    import sources.dpsa_circular as dpsa
+
+    calls = []
+
+    def fake_get(*a, **k):
+        calls.append(1)
+        return _FakeResponse(b"<pdf bytes>")
+
+    monkeypatch.setattr("requests.get", fake_get)
+    monkeypatch.setattr("pdfplumber.open", _FakePdf)
+
+    cache_file = dpsa._cache_path(CIRCULAR_URL)
+    cache_file.parent.mkdir(parents=True, exist_ok=True)
+    cache_file.write_text("stale text", encoding="utf-8")
+    stale_time = __import__("time").time() - dpsa.CACHE_TTL_SECONDS - 3600
+    import os
+
+    os.utime(cache_file, (stale_time, stale_time))
+
+    source = DpsaCircularSource({"name": "dpsa_circular", "url": CIRCULAR_URL})
+    assert source.fetch_text(CIRCULAR_URL) == REALISTIC
+    assert len(calls) == 1
+
+
+def test_failed_download_does_not_poison_cache(monkeypatch):
+    """Once cached, a dead network cannot break searches until TTL expires."""
+    monkeypatch.setattr("pdfplumber.open", _FakePdf)
+    state = {"fail": False}
+
+    def fake_get(*a, **k):
+        if state["fail"]:
+            raise requests.Timeout("network down")
+        return _FakeResponse(b"<pdf bytes>")
+
+    monkeypatch.setattr("requests.get", fake_get)
+    source = DpsaCircularSource({"name": "dpsa_circular", "url": CIRCULAR_URL})
+
+    assert source.fetch_text(CIRCULAR_URL) == REALISTIC
+    state["fail"] = True
+    # network is down, but the fresh cache keeps the source working
     assert source.fetch_text(CIRCULAR_URL) == REALISTIC

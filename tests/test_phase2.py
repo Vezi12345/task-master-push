@@ -34,6 +34,15 @@ from agent.parse_intent import UserIntent, parse_user_intent
 import config
 
 
+@pytest.fixture(autouse=True)
+def _isolated_answer_store(tmp_path, monkeypatch):
+    """Never read/write the real data/answers.json from tests: live usage of
+    the app persists genuine user answers there, which would otherwise flip
+    'missing' expectations."""
+    monkeypatch.setattr(config, "ANSWERS_FILE", tmp_path / "answers.json")
+    monkeypatch.setattr(config, "ANSWER_CONFLICTS_FILE", tmp_path / "conflicts.json")
+
+
 def _region():
     return config.load_region("za")
 
@@ -257,8 +266,8 @@ def test_detect_job_requirements_disability():
     assert any(m.field_key == "disability" for m in missing)
 
 
-def test_detect_job_requirements_with_answer_store():
-    store = AnswerStore()
+def test_detect_job_requirements_with_answer_store(tmp_path):
+    store = AnswerStore(tmp_path / "answers.json")
     store.set("work_authorisation", "Yes")
     engine = QuestionEngine(store)
     profile = CandidateProfile()
@@ -275,15 +284,20 @@ def test_detect_job_requirements_no_match():
     assert len(missing) == 0
 
 
-def test_question_engine_full_taxonomy():
-    engine = QuestionEngine()
+def test_question_engine_full_taxonomy(tmp_path):
+    engine = QuestionEngine(AnswerStore(tmp_path / "answers.json"))
     profile = CandidateProfile(
         education=[Education(qualification="BSc", field="CS")],
-        experience=[Experience(title="Dev", company="Co")],
+        experience=[
+            Experience(
+                title="Dev", company="Co",
+                start_date="2025-01-01", end_date="2025-07-01",
+            ),
+        ],
     )
     answered, missing = engine.resolve_common_questions(profile)
     assert "highest_qualification" in answered
-    assert "years_experience" in answered
+    assert "years_experience" in answered  # derived from real employment dates
     assert any(m.field_key == "expected_salary" for m in missing)
 
 

@@ -45,6 +45,11 @@ def _configure_console() -> None:
 
 def main() -> None:
     _configure_console()
+
+    if len(sys.argv) > 1 and sys.argv[1] == "gmail-auth":
+        _gmail_auth()
+        return
+
     print(BANNER)
     config.ensure_data_dir()
     region = config.load_region()
@@ -92,6 +97,15 @@ def main() -> None:
 
         prompt = _prompt()
     print("Bye.")
+
+
+def _gmail_auth() -> None:
+    from application.gmail_api import run_authorization_flow
+    try:
+        run_authorization_flow()
+    except SystemExit as exc:
+        print(exc)
+        sys.exit(1)
 
 
 def _prompt() -> str:

@@ -2,7 +2,7 @@ import config
 from agent.parse_intent import JobQuery, parse_intent
 from agent.rank import rank_jobs
 from sources.base import Job
-from sources.demo import DEMO_JOBS, DemoSource
+from evaluation.fixtures import load_fixture_jobs
 
 
 def _query(prompt: str):
@@ -10,7 +10,7 @@ def _query(prompt: str):
 
 
 def _jobs():
-    return DemoSource().search(None)
+    return load_fixture_jobs()
 
 
 def test_durban_example_ranks_remotely_first():
@@ -156,3 +156,83 @@ def test_unrelated_roles_still_filtered():
     assert "Administration Clerk" not in titles
     assert "Finance Graduate" not in titles
     assert "IT Support Technician" not in titles
+
+
+# ---------------------------------------------------------------------------
+# Entry-level leadership gate + junk-keyword armour
+# ---------------------------------------------------------------------------
+
+def _job(title, description="Generic duties as required.", company="GovCo", location="Pretoria"):
+    return Job(title=title, company=company, location=location, description=description)
+
+
+def test_entry_level_query_filters_leadership_titles():
+    query = _query("Find me entry-level finance jobs.")
+    jobs = [
+        _job("REGIONAL HEAD: FINANCE", "Manage the regional finance office."),
+        _job("CHIEF DIRECTOR: FINANCIAL MANAGEMENT", "Executive financial management."),
+        _job("SENIOR STATE ACCOUNTANT: BUDGET", "Budget and expenditure accounting."),
+        _job("FINANCE CLERK", "Capture and reconcile finance transactions."),
+        _job("GRADUATE INTERNSHIP: FINANCIAL MANAGEMENT", "24-month graduate programme."),
+    ]
+    ranked = rank_jobs(jobs, query)
+    titles = [item.job.title for item in ranked]
+    assert "REGIONAL HEAD: FINANCE" not in titles
+    assert "CHIEF DIRECTOR: FINANCIAL MANAGEMENT" not in titles
+    assert "SENIOR STATE ACCOUNTANT: BUDGET" not in titles
+    # developmental posts survive even with leadership-ish wording elsewhere
+    assert "GRADUATE INTERNSHIP: FINANCIAL MANAGEMENT" in titles
+    assert "FINANCE CLERK" in titles
+
+
+def test_seniority_not_requested_keeps_leadership_titles():
+    query = _query("Find me finance jobs.")
+    jobs = [_job("REGIONAL HEAD: FINANCE", "Manage the regional finance office.")]
+    ranked = rank_jobs(jobs, query)
+    assert len(ranked) == 1
+
+
+def test_typo_keywords_never_reported_as_missing_requirements():
+    query = _query("okay then seeach for accounting jobs")
+    assert query.roles == ["finance"]
+    assert "okay" not in query.keywords
+    assert "then" not in query.keywords
+
+    job = _job(
+        "ACCOUNTING CLERK: RECONCILIATION",
+        "Reconcile accounts and capture finance transactions.",
+    )
+    ranked = rank_jobs([job], query)
+    assert ranked, "accounting clerk must match a finance/accounting request"
+    blob = " | ".join(ranked[0].reasons) + " " + ranked[0].summary
+    assert "seeach" not in blob
+    assert "missing okay" not in blob
+
+
+def test_skills_reasons_only_reference_explicit_skills():
+    query = _query("bookkeeper or accounts clerk jobs")
+    job = _job("FINANCE CLERK", "Bookkeeping support and finance administration.")
+    ranked = rank_jobs([job], query)
+    skill_reasons = [r for r in ranked[0].reasons if r.startswith("Skills")]
+    assert skill_reasons
+    assert all("missing" not in r.lower() for r in skill_reasons)
+
+
+def test_leadership_titles_demoted_without_explicit_seniority():
+    query = _query("Find me finance jobs.")
+    jobs = [
+        _job("REGIONAL HEAD: FINANCE", "Manage the regional finance office."),
+        _job("FINANCE CLERK", "Capture and reconcile finance transactions."),
+    ]
+    ranked = rank_jobs(jobs, query)
+    by_title = {item.job.title: item for item in ranked}
+    assert by_title["FINANCE CLERK"].score > by_title["REGIONAL HEAD: FINANCE"].score
+    head = by_title["REGIONAL HEAD: FINANCE"]
+    assert any("leadership title" in r for r in head.reasons)
+
+
+def test_leadership_demotion_not_applied_to_developmental_posts():
+    query = _query("Find me finance jobs.")
+    job = _job("GRADUATE INTERNSHIP: FINANCIAL MANAGEMENT", "24-month programme.")
+    ranked = rank_jobs([job], query)
+    assert not any("leadership title" in r for r in ranked[0].reasons)

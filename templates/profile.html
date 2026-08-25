@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Task Master — My Profile</title>
+  <link rel="stylesheet" href="/static/css/app.css"/>
+  <style>
+    .banner {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 18px 20px; margin-bottom: 14px;
+    }
+    .bar { height:12px; background:var(--surface2); border-radius:8px; overflow:hidden; margin-top:8px; }
+    .bar > div { height:100%; background:var(--ok); transition:width .4s; }
+    .prompt { background:#2a2410; border:1px solid #5a4d1a; border-radius:8px; padding:10px 12px; margin:8px 0; display:flex; justify-content:space-between; align-items:center; gap:10px; }
+    .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:10px; margin-top:10px; }
+    label { display:block; font-size:12.5px; color:var(--muted); font-weight:600; }
+    input[type=text], input[type=url], textarea, select { font-size:13.5px; }
+    button { background:var(--accent); border:0; border-radius:8px; padding:8px 14px; cursor:pointer; font-weight:600; color:#fff; margin-top:8px; transition:background .15s; }
+    button:hover:not(:disabled) { background:var(--accent-hover); color:#fff; }
+    button.secondary { background:var(--surface2); color:var(--muted); }
+    button.secondary:hover:not(:disabled) { background:var(--surface2); color:var(--text); border-color:var(--accent); }
+    .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+    .item { border:1px solid var(--border); border-radius:8px; padding:10px 12px; margin-top:8px; }
+    .item b { color:var(--text); }
+    .tag { display:inline-block; background:var(--surface2); border-radius:10px; padding:1px 8px; font-size:11.5px; color:var(--muted); margin-right:4px; }
+    .flag-ok { color:var(--ok); font-weight:700; }
+    .flag-warn { color:var(--warn); font-weight:700; }
+    .flag-req { color:var(--bad); font-weight:700; }
+    .flag-unknown { color:var(--muted); font-weight:700; }
+    .memrow { display:flex; gap:10px; align-items:center; border-top:1px solid var(--border); padding:7px 2px; flex-wrap:wrap; }
+    .memrow:first-of-type { border-top:0; }
+    .memrow .lbl { width:210px; font-size:13px; color:var(--text); }
+    .memrow .val { flex:1; min-width:160px; font-size:13.5px; }
+    .memrow input[type=text], .memrow input[type=url] { margin-top:0; }
+    .memrow button { margin-top:0; }
+    .conflict { background:#2a1515; border-color:#5a2626; }
+    .status-chip { font-size:11px; padding:1px 7px; border-radius:9px; background:var(--surface2); color:var(--muted); }
+  </style>
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="/">Task <span>Master</span></a>
+  <nav>
+    <a href="/">Job search</a>
+    <a href="/applications">Applications</a>
+    <a href="/profile" class="active">My Profile</a>
+  </nav>
+</header>
+<main class="page" id="root"><p class="muted">Loading profile…</p></main>
+
+<script>
+let PROFILE = null, COMPLETION = null;
+
+async function load() {
+  const res = await fetch("/api/profile");
+  const data = await res.json();
+  PROFILE = data.profile;
+  COMPLETION = data.completion;
+  render(data);
+}
+
+function esc(s){ return String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+
+function render({profile, completion, missing_prompts}) {
+  const root = document.getElementById("root");
+  if (!profile) {
+    root.innerHTML = `
+      <div class="banner">
+        <h2>Welcome! Start with your CV</h2>
+        <p class="muted">Upload your CV — we extract what we can, you verify it, and it's saved for every future application. Nothing is guessed.</p>
+        <input type="file" accept=".pdf" onchange="uploadCv(this.files[0])"/>
+        <div id="cvMsg" class="muted"></div>
+      </div>
+      <div id="memoryRoot"><p class="muted">Loading my information…</p></div>`;
+    loadMemory();
+    return;
+  }
+  const pct = completion.overall;
+  const prompts = (missing_prompts || []).map(p => `
+    <div class="prompt"><span>${esc(p.label)}</span><button class="secondary" onclick="jump('${esc(p.target)}')">Add now</button></div>`).join("");
+  const p = profile;
+  root.innerHTML = `
+    <div class="banner">
+      <h2>Profile strength — ${pct}%</h2>
+      <div class="bar"><div style="width:${pct}%"></div></div>
+      ${prompts ? `<p class="muted" style="margin-bottom:0">Suggested next steps:</p>${prompts}` : '<p class="flag-ok" style="margin:6px 0 0">Profile looks complete.</p>'}
+    </div>
+
+    <div class="card" id="#personal">
+      <h3>Personal &amp; contact details</h3>
+      <div class="grid">
+        <div><label>First name</label><input type="text" id="f_first_name" value="${esc(p.first_name)}"/></div>
+        <div><label>Last name</label><input type="text" id="f_last_name" value="${esc(p.last_name ?? "")}"/></div>
+        <div><label>Email</label><input type="text" id="f_email" value="${esc(p.email)}"/></div>
+        <div><label>Phone</label><input type="text" id="f_phone" value="${esc(p.phone)}"/></div>
+        <div><label>Location</label><input type="text" id="f_location" value="${esc(p.location)}"/></div>
+        <div><label>Country of residence</label><input type="text" id="f_country_of_residence" value="${esc(p.country_of_residence)}"/></div>
+      </div>
+      <p class="muted" style="margin-bottom:0">Sensitive details (date of birth, gender, race) are only ever stored when YOU enter them here — never inferred from your CV or applications.</p>
+      <div class="grid">
+        <div><label>Date of birth <span class="muted">(sensitive)</span></label><input type="text" id="f_date_of_birth" value="${esc(p.date_of_birth)}"/></div>
+        <div><label>Gender <span class="muted">(sensitive)</span></label><input type="text" id="f_gender" value="${esc(p.gender ?? "")}"/></div>
+      </div>
+      <button onclick="saveFields(['first_name','last_name','email','phone','location','country_of_residence','date_of_birth','gender'])">Save personal details</button>
+    </div>
+
+    <div class="card" id="#education">
+      <h3>Education</h3>
+      ${(p.education||[]).map((e,i)=>`
+        <div class="item">
+          <b>${esc(e.institution)}</b> — ${esc(e.qualification)}${e.field?` (${esc(e.field)})`:""}
+          <div class="grid">
+            <div><label>Result / marks <span class="muted">(NOT the qualification name)</span></label>
+              <input type="text" id="edu_${i}_result" value="${esc(e.result)}" placeholder="e.g. 65%, GPA 3.4"/></div>
+            <div><label>Grading system</label>
+              <select id="edu_${i}_grading_system">
+                ${["","Percentage","GPA 4.0","GPA 5.0","Other"].map(g=>`<option ${g===(e.grading_system||"")?"selected":""}>${g}</option>`).join("")}
+              </select></div>
+          </div>
+          <button class="secondary" onclick="saveEducation(${i})">Save result</button>
+        </div>`).join("") || '<p class="muted">No qualifications recorded yet.</p>'}
+    </div>
+
+    <div class="card" id="#high-school">
+      <h3>High school <span class="muted">(optional — never inferred)</span></h3>
+      <div class="grid">
+        <div><label>School</label><input type="text" id="hs_school" value="${esc(p.high_school?.school||"")}"/></div>
+        <div><label>Completion year</label><input type="text" id="hs_completion_year" value="${esc(p.high_school?.completion_year||"")}"/></div>
+        <div><label>Mathematics result</label><input type="text" id="hs_mathematics_result" value="${esc(p.high_school?.mathematics_result||"")}"/></div>
+        <div><label>Home / native language</label><input type="text" id="hs_native_language" value="${esc(p.high_school?.native_language||"")}"/></div>
+        <div><label>Native language result</label><input type="text" id="hs_native_language_result" value="${esc(p.high_school?.native_language_result||"")}"/></div>
+        <div><label>Overall result</label><input type="text" id="hs_overall_result" value="${esc(p.high_school?.overall_result||"")}"/></div>
+      </div>
+      <button onclick="saveHighSchool()">Save high school</button>
+    </div>
+
+    <div class="card" id="#experience">
+      <h3>Work experience</h3>
+      ${(p.experience||[]).map(x=>`
+        <div class="item"><b>${esc(x.company)}</b> — ${esc(x.title)}
+        <span class="muted">${esc(x.start_date)} – ${esc(x.end_date)}</span>
+        ${x.skills.length?`<br/><span class="muted">Skills used:</span> ${x.skills.map(s=>`<span class="tag">${esc(s)}</span>`).join("")}`:""}</div>`).join("")
+        || '<p class="muted">None yet — that\'s fine for students/fresh graduates.</p>'}
+    </div>
+
+    <div class="card" id="#projects">
+      <h3>Projects</h3>
+      ${(p.projects||[]).map(pr=>`
+        <div class="item"><b>${esc(pr.name||pr.description.slice(0,40))}</b>
+          ${pr.is_personal?'<span class="tag">personal</span>':""}${pr.is_academic?'<span class="tag">academic</span>':""}${pr.is_work_related?'<span class="tag">work</span>':""}
+          ${pr.description?`<div class="muted">${esc(pr.description)}</div>`:""}
+          ${pr.technologies.length?`<span class="tag">${pr.technologies.map(esc).join("</span><span class='tag'>")}</span>`:""}
+          ${pr.url?`<br/><a href="${esc(pr.url)}" target="_blank">${esc(pr.url)}</a>`:""}
+        </div>`).join("") || '<p class="muted">No projects yet — even one personal project helps interviews a lot.</p>'}
+      <details><summary class="muted" style="cursor:pointer;margin-top:8px">+ Add a project</summary>
+        <div class="grid">
+          <div><label>Name</label><input type="text" id="proj_name"/></div>
+          <div><label>Description</label><input type="text" id="proj_description"/></div>
+          <div><label>Technologies (comma-separated)</label><input type="text" id="proj_technologies"/></div>
+          <div><label>Live URL</label><input type="url" id="proj_url"/></div>
+          <div><label>GitHub URL</label><input type="url" id="proj_github_url"/></div>
+          <div><label>Your role</label><input type="text" id="proj_role"/></div>
+        </div>
+        <div class="row">
+          <label style="margin-top:10px"><input type="checkbox" id="proj_is_personal"/> Personal</label>
+          <label style="margin-top:10px"><input type="checkbox" id="proj_is_academic"/> Academic</label>
+          <label style="margin-top:10px"><input type="checkbox" id="proj_is_work_related"/> Work-related</label>
+        </div>
+        <button onclick="addProject()">Save project</button>
+      </details>
+    </div>
+
+    <div class="card" id="#skills">
+      <h3>Skills</h3>
+      ${(p.skill_details&&p.skill_details.length?p.skill_details:p.skills.map(s=>({name:s,evidence:"",source:""}))).map(s=>`
+        <div class="item row" style="justify-content:space-between">
+          <span><b>${esc(s.name)}</b>${s.category?` <span class="tag">${esc(s.category)}</span>`:""} ${s.evidence?`<span class="flag-ok" title="${esc(s.evidence)}">✓ evidence on file</span>`:'<span class="flag-warn">no evidence yet</span>'}</span>
+        </div>`).join("") || '<p class="muted">No skills listed.</p>'}
+    </div>
+
+    <div class="card" id="#online">
+      <h3>Online presence <span class="muted">(verified URLs only)</span></h3>
+      <div class="grid">
+        <div><label>LinkedIn</label><input type="url" id="op_linkedin" value="${esc(p.online_profiles?.linkedin||"")}" placeholder="https://linkedin.com/in/…"/></div>
+        <div><label>Personal website</label><input type="url" id="op_website" value="${esc(p.online_profiles?.website||"")}"/></div>
+        <div><label>GitHub</label><input type="url" id="op_github" value="${esc(p.online_profiles?.github||"")}"/></div>
+        <div><label>Portfolio</label><input type="url" id="op_portfolio" value="${esc(p.online_profiles?.portfolio||"")}"/></div>
+      </div>
+      <button onclick="saveOnline()">Save links</button>
+    </div>
+
+    <div class="card" id="#preferences">
+      <h3>Job preferences</h3>
+      <div class="grid">
+        <div><label>Expected salary</label><input type="text" id="f_expected_salary" value="${esc(p.expected_salary)}"/></div>
+        <div><label>Notice period</label><input type="text" id="f_notice_period" value="${esc(p.notice_period)}"/></div>
+        <div><label>Willing to relocate?</label><input type="text" id="f_relocation" value="${esc(p.relocation)}"/></div>
+        <div><label>Drivers licence</label><input type="text" id="f_drivers_licence" value="${esc(p.drivers_licence)}"/></div>
+        <div><label>Citizenship</label><input type="text" id="f_citizenship" value="${esc(p.citizenship)}"/></div>
+      </div>
+      <button onclick="saveFields(['expected_salary','notice_period','relocation','drivers_licence','citizenship'])">Save preferences</button>
+    </div>
+
+    <div class="card" id="#answers">
+      <h3>Remembered application answers</h3>
+      ${(p.question_memory||[]).map(a=>`
+        <div class="item">
+          <b>${esc(a.question)}</b><div>${esc(a.answer)}</div>
+          <span class="tag">${esc(a.confidence||"high")} confidence</span>
+          <span class="muted">${esc(a.updated_at||"")}</span>
+        </div>`).join("") || '<p class="muted">Nothing remembered yet. When you answer a question during an application and tick "save to my profile", it appears here.</p>'}
+    </div>
+
+    <div id="memoryRoot"><p class="muted">Loading my information…</p></div>`;
+  loadMemory();
+}
+
+// ---------------------------------------------------------------------------
+// My Information — persistent answer memory with provenance
+// ---------------------------------------------------------------------------
+
+const STATUS_MARKERS = {
+  verified:           ['flag-ok',      '✓ Verified'],
+  needs_confirmation: ['flag-warn',    '⚠ Needs confirmation'],
+  draft:              ['flag-warn',    '⚠ Draft — review'],
+  user_required:      ['flag-req',     '✱ USER REQUIRED'],
+  unknown:            ['flag-unknown', '? Unknown'],
+};
+
+async function loadMemory() {
+  const root = document.getElementById("memoryRoot");
+  if (!root) return;
+  const res = await fetch("/api/profile/memory");
+  const data = await res.json();
+  renderMemory(root, data);
+}
+
+function memoryFieldRow(f) {
+  const [cls, text] = STATUS_MARKERS[f.status] || STATUS_MARKERS.unknown;
+  const value = f.value ? esc(f.value)
+    : `<span class="muted">${f.custom ? "not answered yet" : (f.status === "user_required" ? "you must provide this" : "not set")}</span>`;
+  return `
+    <div class="memrow" id="memrow_${esc(f.key)}">
+      <span class="${cls}" title="${esc(f.explanation || "")}">${text}</span>
+      <span class="lbl">${esc(f.label)}${f.sensitive ? ' <span class="tag">sensitive</span>' : ""}</span>
+      <span class="val">${value}${f.source && f.value ? ` <span class="status-chip">${esc(f.source)}</span>` : ""}</span>
+      ${f.custom
+        ? ""
+        : `<button class="secondary" onclick="editMemory('${esc(f.key)}', '${esc((f.value||"").replace(/'/g,"\\'"))}')">Edit</button>`}
+    </div>`;
+}
+
+function editMemory(key, current) {
+  const row = document.getElementById(`memrow_${key}`);
+  if (!row || row.dataset.editing) return;
+  row.dataset.editing = "1";
+  const valCell = row.querySelector(".val");
+  valCell.innerHTML = `
+    <input type="text" id="memin_${key}" value="${esc(current)}"/>
+    <button onclick="saveMemory('${esc(key)}')">Save</button>
+    <button class="secondary" onclick="loadMemory()">Cancel</button>`;
+  const input = document.getElementById(`memin_${key}`);
+  input.focus(); input.select();
+}
+
+async function saveMemory(key) {
+  const input = document.getElementById(`memin_${key}`);
+  const answer = (input ? input.value : "").trim();
+  if (!answer) return;
+  const res = await fetch("/api/profile/memory/answer", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ key, answer }),
+  });
+  if (res.status === 409) {
+    const data = await res.json();
+    alert(data.message || "A verified answer already exists — resolve the conflict below.");
+  }
+  await Promise.all([loadMemory(), load()]);
+}
+
+async function resolveConflict(id, choice) {
+  await fetch(`/api/profile/memory/conflict/${id}/resolve`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ choice }),
+  });
+  await Promise.all([loadMemory(), load()]);
+}
+
+function renderMemory(root, data) {
+  const conflicts = (data.pending_conflicts || []).map(c => `
+    <div class="item conflict">
+      <b>⚠ Conflict — please choose the correct answer</b> <span class="muted">${esc(c.question || c.key)}</span>
+      <div class="memrow"><span class="lbl">Current verified</span><span class="val"><b>${esc(c.existing_value)}</b></span>
+        <button class="secondary" onclick="resolveConflict('${esc(c.id)}','existing')">Keep current</button></div>
+      <div class="memrow"><span class="lbl">New answer</span><span class="val"><b>${esc(c.proposed_value)}</b></span>
+        <button onclick="resolveConflict('${esc(c.id)}','new')">Use new</button></div>
+    </div>`).join("");
+
+  const counts = data.counts || {};
+  const summary = `
+    <span class="flag-ok">✓ ${counts.verified || 0} verified</span>
+    <span class="flag-warn">⚠ ${(counts.needs_confirmation || 0) + (counts.draft || 0)} need confirmation</span>
+    <span class="flag-req">✱ ${counts.user_required || 0} required from you</span>
+    <span class="flag-unknown">? ${counts.unknown || 0} unknown</span>`;
+
+  const sections = (data.categories || []).map(cat => `
+    <div class="card">
+      <h3>${esc(cat.name)}</h3>
+      ${cat.fields.map(memoryFieldRow).join("")}
+    </div>`).join("");
+
+  root.innerHTML = `
+    <div class="banner">
+      <h2>My Information</h2>
+      <p class="muted" style="margin:2px 0 6px">Answers saved here are reused automatically on future applications. Verified answers are never silently overwritten — you will be asked which one is correct.</p>
+      ${summary}
+      ${conflicts}
+    </div>
+    ${sections}`;
+}
+
+async function uploadCv(file) {
+  const msg = document.getElementById("cvMsg");
+  msg.textContent = "Extracting…";
+  const fd = new FormData();
+  fd.append("cv", file);
+  const res = await fetch("/api/upload-cv", {method:"POST", body:fd});
+  const data = await res.json();
+  if (data.error) { msg.textContent = "⚠ " + data.error; return; }
+  msg.textContent = "✓ Extracted — please verify each section below (nothing is auto-trusted).";
+  setTimeout(load, 800);
+}
+
+function val(id){ const el=document.getElementById(id); return el?el.value.trim():""; }
+
+async function saveFields(fields) {
+  const body = {};
+  fields.forEach(f => {
+    const el = document.getElementById("f_" + f);
+    if (el) body[f] = el.value.trim();
+  });
+  if (fields.includes("first_name")) {
+    const fn = (document.getElementById("f_first_name").value||"").trim();
+    const ln = (document.getElementById("f_last_name").value||"").trim();
+    body.name = (fn + " " + ln).trim();
+  }
+  const res = await fetch("/api/profile", {
+    method:"PUT", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)
+  });
+  const data = await res.json();
+  alert(data.ok ? "Saved." : ("Error: " + data.error));
+  load();
+}
+
+async function saveEducation(i) {
+  const res = await fetch(`/api/profile/education/${i}/result`, {
+    method:"POST", headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({
+      result: document.getElementById(`edu_${i}_result`).value.trim(),
+      grading_system: document.getElementById(`edu_${i}_grading_system`).value,
+    })});
+  const data = await res.json();
+  alert(data.ok ? "Result saved." : ("Error: " + data.error));
+  load();
+}
+
+async function saveHighSchool() {
+  const keys = ["school","completion_year","mathematics_result","native_language","native_language_result","overall_result"];
+  const hs = {};
+  keys.forEach(k => { hs[k] = document.getElementById("hs_"+k).value.trim(); });
+  const res = await fetch("/api/profile/high-school", {
+    method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(hs)});
+  const data = await res.json();
+  alert(data.ok ? "High school saved." : ("Error: " + data.error));
+  load();
+}
+
+async function saveOnline() {
+  const op = {};
+  ["linkedin","website","github","portfolio"].forEach(k => {
+    op[k] = document.getElementById("op_"+k).value.trim();
+  });
+  const res = await fetch("/api/profile/online-profiles", {
+    method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(op)});
+  const data = await res.json();
+  alert(data.ok ? "Links saved." : ("Error: " + data.error));
+  load();
+}
+
+async function addProject() {
+  const res = await fetch("/api/profile/projects", {
+    method:"POST", headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({
+      name: val("proj_name"), description: val("proj_description"),
+      technologies: val("proj_technologies"), url: val("proj_url"),
+      github_url: val("proj_github_url"), role: val("proj_role"),
+      is_personal: document.getElementById("proj_is_personal").checked,
+      is_academic: document.getElementById("proj_is_academic").checked,
+      is_work_related: document.getElementById("proj_is_work_related").checked,
+    })});
+  const data = await res.json();
+  alert(data.ok ? "Project saved." : ("Error: " + data.error));
+  load();
+}
+
+function val(id){ const el=document.getElementById(id); return el?el.value.trim():""; }
+function jump(target){
+  const el = document.querySelector(target) || Array.from(document.querySelectorAll(".card h3")).find(h=>h.textContent.toLowerCase().includes(target.replace("#","")));
+  if (el) el.closest(".card").scrollIntoView({behavior:"smooth"});
+}
+load();
+</script>
+</body>
+</html>

@@ -21,14 +21,24 @@ from agent.orchestrator import (
     PipelineResult,
 )
 from application.models import ApplicationStatus
+from application.question_engine import QuestionEngine
+from application.answer_engine import AnswerType
 from candidate.profile import CandidateProfile, Education, Experience, KnownField, KnowledgeStatus
 from sources.base import Job
-from sources.demo import DemoSource
+from conftest import make_valid_job
 import config
 
 
 def _region():
     return config.load_region("za")
+
+
+@pytest.fixture(autouse=True)
+def _isolated_answer_store(tmp_path, monkeypatch):
+    """QuestionEngine() must never read the real data/answers.json: live app
+    usage persists genuine verified user answers there."""
+    monkeypatch.setattr(config, "ANSWERS_FILE", tmp_path / "answers.json")
+    monkeypatch.setattr(config, "ANSWER_CONFLICTS_FILE", tmp_path / "conflicts.json")
 
 
 # ---------------------------------------------------------------------------
@@ -164,7 +174,10 @@ def test_agent_result_defaults():
 
 def test_agent_search(monkeypatch):
     from sources.dpsa_circular import DpsaCircularSource
-    monkeypatch.setattr(DpsaCircularSource, "search", lambda self, query: [])
+    monkeypatch.setattr(
+        DpsaCircularSource, "search",
+        lambda self, query: [make_valid_job()],
+    )
 
     region = _region()
     agent = JobApplicationAgent(region)
@@ -179,7 +192,10 @@ def test_agent_search_with_cv(monkeypatch, tmp_path):
     from sources.dpsa_circular import DpsaCircularSource
     from candidate import storage
 
-    monkeypatch.setattr(DpsaCircularSource, "search", lambda self, query: [])
+    monkeypatch.setattr(
+        DpsaCircularSource, "search",
+        lambda self, query: [make_valid_job()],
+    )
     monkeypatch.setattr(storage, "PROFILE_FILE", tmp_path / "profile.json")
     monkeypatch.setattr(storage, "DATA_DIR", tmp_path)
 
@@ -204,10 +220,14 @@ def test_agent_apply(monkeypatch, tmp_path):
     from candidate import storage
     from application import tracker as tracker_module
 
-    monkeypatch.setattr(DpsaCircularSource, "search", lambda self, query: [])
+    monkeypatch.setattr(
+        DpsaCircularSource, "search",
+        lambda self, query: [make_valid_job()],
+    )
     monkeypatch.setattr(storage, "PROFILE_FILE", tmp_path / "profile.json")
     monkeypatch.setattr(storage, "DATA_DIR", tmp_path)
     monkeypatch.setattr(tracker_module, "TRACKER_FILE", tmp_path / "applications.json")
+    monkeypatch.setattr(config, "ANSWERS_FILE", tmp_path / "answers.json")
 
     profile = CandidateProfile(
         name="Test User",
@@ -300,13 +320,20 @@ def test_agent_provide_answers():
 
 def test_agent_unknown_intent(monkeypatch):
     from sources.dpsa_circular import DpsaCircularSource
-    monkeypatch.setattr(DpsaCircularSource, "search", lambda self, query: [])
+
+    searched = []
+    monkeypatch.setattr(
+        DpsaCircularSource, "search",
+        lambda self, query: searched.append(query) or [],
+    )
 
     region = _region()
     agent = JobApplicationAgent(region)
     result = agent.process_input("hello there")
-    assert result.state == AgentState.COMPLETED
-    assert result.ranked is not None
+    # greetings must NOT trigger a source crawl - agent asks for clarity instead
+    assert result.error is not None
+    assert result.ranked == []
+    assert searched == []
 
 
 # ---------------------------------------------------------------------------
@@ -360,6 +387,8 @@ def test_candidate_profile_knowledge_from_education():
 
 
 def test_candidate_profile_knowledge_from_experience():
+    """Experience length must never be fabricated by counting CV entries —
+    it is derived from actual employment dates (see answer engine)."""
     profile = CandidateProfile(
         experience=[
             Experience(title="Dev1", company="Co1"),
@@ -367,7 +396,22 @@ def test_candidate_profile_knowledge_from_experience():
         ],
     )
     profile.populate_known_fields()
-    assert profile.get_known_value("years_experience") == "2"
+    assert profile.get_known_value("years_experience") is None
+
+    dated = CandidateProfile(
+        experience=[
+            Experience(
+                title="Dev1", company="Co1",
+                start_date="2025-01-01", end_date="2025-07-01",
+                experience_type="employment",
+            ),
+        ],
+    )
+    engine = QuestionEngine()
+    result = engine.answer("How many years of experience do you have?", dated)
+    assert result.is_answered
+    assert result.answer_type == AnswerType.DERIVED
+    assert "6" in result.answer  # months calculated from the real date range
 
 
 def test_candidate_profile_always_unknown_fields():
@@ -380,3 +424,46 @@ def test_candidate_profile_always_unknown_fields():
     assert profile.is_known("work_authorisation") is False
     assert profile.is_known("availability") is False
     assert profile.is_known("citizenship") is False
+
+
+# ---------------------------------------------------------------------------
+# Conversational turn isolation
+# ---------------------------------------------------------------------------
+
+def test_each_turn_gets_fresh_message_buffer(monkeypatch):
+    from sources.dpsa_circular import DpsaCircularSource
+
+    region = _region()
+    agent = JobApplicationAgent(region)
+
+    # turn 1: an unknown-intent turn that leaves messages behind
+    first = agent.process_input("hello there")
+    assert first.messages, "turn must contain its own messages"
+
+    # turn 2: the buffer must NOT replay turn 1
+    second = agent.process_input("show my applications")
+    contents = " ".join(m.content for m in second.messages)
+    assert "hello there" not in contents
+    assert len(second.messages) < len(first.messages) + 3
+
+
+def test_turn_isolation_across_searches(monkeypatch):
+    from sources.dpsa_circular import DpsaCircularSource
+
+    calls = {"n": 0}
+
+    def fake_search(self, query):
+        calls["n"] += 1
+        return []
+
+    monkeypatch.setattr(DpsaCircularSource, "search", fake_search)
+    monkeypatch.setattr("agent.orchestrator.search_jobs", lambda q, r: ([], ["msg-a"]))
+
+    region = _region()
+    agent = JobApplicationAgent(region)
+    agent.process_input("find barista jobs in Durban")
+    assert calls["n"] == 0  # dpsa untouched: search_jobs is patched at orchestrator
+
+    result = agent.process_input("show my applications")
+    blob = " ".join(m.content for m in result.messages)
+    assert "msg-a" not in blob, "previous search chatter leaked into next turn"

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 
 from sources.base import Job
@@ -35,6 +36,18 @@ SENIOR_MARKERS = [
     "10+ years",
     "5 - 10 years",
 ]
+
+# Leadership signals judged on the TITLE only: a graduate programme's
+# description may mention anything, but a "CHIEF DIRECTOR" title is not an
+# entry-level job no matter what the body text says.
+LEADERSHIP_TITLE_RE = re.compile(
+    r"\b(chief|deputy director|director|regional head|head|senior|principal)\b",
+    re.IGNORECASE,
+)
+# ...unless the title itself marks the post as developmental.
+DEVELOPMENTAL_TITLE_RE = re.compile(
+    r"\b(intern|internship|trainee|learner|graduate?)\b", re.IGNORECASE
+)
 
 
 @dataclass
@@ -126,6 +139,11 @@ def _role_allowed(job: Job, query: JobQuery) -> bool:
 def _seniority_allowed(job: Job, query: JobQuery) -> bool:
     if query.seniority != "entry-level":
         return True
+    title = job.title.lower()
+    if DEVELOPMENTAL_TITLE_RE.search(title):
+        return True
+    if LEADERSHIP_TITLE_RE.search(title):
+        return False
     text = f"{job.title} {job.description}".lower()
     has_entry = any(marker in text for marker in ENTRY_MARKERS)
     has_senior = any(marker in text for marker in SENIOR_MARKERS)
@@ -167,6 +185,12 @@ def _rank_job(job: Job, query: JobQuery, llm=None) -> RankedJob:
     points += _salary_score(job, query, reasons)
     points += _skills_score(job, query, reasons)
     points += _remote_score(job, query, reasons)
+
+    title = job.title.lower()
+    if (LEADERSHIP_TITLE_RE.search(title)
+            and not DEVELOPMENTAL_TITLE_RE.search(title)):
+        points -= 12
+        reasons.append("Seniority: ~ leadership title (ranked lower)")
 
     score = round(points / TOTAL_WEIGHT * 100)
     score = max(0, min(100, score))
@@ -252,9 +276,14 @@ def _salary_score(job: Job, query: JobQuery, reasons: list[str]) -> int:
 
 
 def _matching_terms(query: JobQuery) -> list[str]:
+    """Requirement-grade terms: explicit skills only.
+
+    Free-text keywords are fuzzy search hints, NOT requirements - they must
+    never surface as 'missing' items against a job or the candidate.
+    """
     seen: set[str] = set()
     terms: list[str] = []
-    for term in list(query.skills) + list(query.keywords):
+    for term in query.skills:
         key = term.strip().lower()
         if key and key not in seen:
             seen.add(key)
@@ -262,20 +291,35 @@ def _matching_terms(query: JobQuery) -> list[str]:
     return terms
 
 
+def _keyword_hits(job: Job, query: JobQuery) -> list[str]:
+    text = f"{job.title} {job.description}".lower()
+    hits: list[str] = []
+    for kw in query.keywords:
+        key = kw.strip().lower()
+        if len(key) >= 3 and key in text:
+            hits.append(key)
+    return hits
+
+
 def _skills_score(job: Job, query: JobQuery, reasons: list[str]) -> int:
     terms = _matching_terms(query)
     if not terms:
+        # no explicit skills requested: free-text keywords still break ties
+        hits = _keyword_hits(job, query)[:1]
+        if hits:
+            reasons.append(f"Skills:    ✓ keyword '{hits[0]}'")
+            return W_SKILLS
         reasons.append("Skills:    • (not specified)")
-        return W_SKILLS
+        return round(W_SKILLS * 0.6)
     text = f"{job.title} {job.description}".lower()
     matched = [t for t in terms if t in text]
-    missing = [t for t in terms if t not in text]
-    if matched and not missing:
+    if matched:
         reasons.append(f"Skills:    ✓ {', '.join(matched)}")
         return W_SKILLS
-    if matched:
-        reasons.append(f"Skills:    ✓ {', '.join(matched)}   (~ missing {', '.join(missing)})")
-        return round(W_SKILLS * 0.7)
+    keyword_hits = _keyword_hits(job, query)[:2]
+    if keyword_hits:
+        reasons.append(f"Skills:    ~ related keyword '{keyword_hits[0]}' found")
+        return round(W_SKILLS * 0.5)
     reasons.append(f"Skills:    ✗ none of {', '.join(terms)}")
     return 0
 
@@ -308,12 +352,9 @@ def _summary(job: Job, query: JobQuery, llm=None) -> str:
     text = f"{job.title} {job.description}".lower()
     terms = _matching_terms(query)
     matched_skills = [t for t in terms if t in text]
-    missing_skills = [t for t in terms if t not in text]
     bits = []
     if matched_skills:
         bits.append(f"asks for {', '.join(matched_skills)}")
-    if missing_skills:
-        bits.append(f"missing {', '.join(missing_skills)}")
     if job.remote and query.remote == "preferred":
         bits.append("offers remote for SA candidates")
     if job.salary_min is None and query.min_salary is not None:

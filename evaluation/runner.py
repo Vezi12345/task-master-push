@@ -25,10 +25,10 @@ from agent.parse_intent import parse_intent
 from agent.rank import RankedJob, rank_jobs
 from agent.search import dedupe_jobs
 from config import load_region
-from sources.demo import DemoSource
 from sources.dpsa_circular import parse_circular
 
 from .dataset import QUERIES
+from .fixtures import load_fixture_jobs
 
 FIXTURES = {
     "dpsa_circular": "tests/fixtures/dpsa_circular.txt",
@@ -42,8 +42,7 @@ FIELDS = ("roles", "seniority", "locations", "remote", "min_salary", "skills", "
 def build_corpus() -> list:
     from pathlib import Path
 
-    region = load_region("za")
-    corpus = DemoSource(region).search(None)
+    corpus = load_fixture_jobs()
     for source, path in FIXTURES.items():
         text = Path(path).read_text(encoding="utf-8")
         corpus.extend(parse_circular(text, source_url=None, default_company=None))

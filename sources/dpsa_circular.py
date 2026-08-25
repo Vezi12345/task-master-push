@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import hashlib
 import io
 import re
+import time
+from pathlib import Path
 
 import pdfplumber
 import requests
 
+from config import DATA_DIR
 from .base import Job, JobSource, JobSourceError
 
 HEADERS = {
@@ -15,7 +19,32 @@ HEADERS = {
     )
 }
 
-HTTP_TIMEOUT = 20
+HTTP_TIMEOUT = 60
+CACHE_TTL_SECONDS = 3 * 24 * 3600  # circular is weekly; refresh every 3 days
+
+
+def _cache_path(url: str) -> Path:
+    digest = hashlib.sha1(url.encode("utf-8")).hexdigest()[:16]
+    return DATA_DIR / "cache" / f"dpsa_{digest}.txt"
+
+
+def _load_cached_text(url: str) -> str | None:
+    path = _cache_path(url)
+    try:
+        if path.exists() and (time.time() - path.stat().st_mtime) < CACHE_TTL_SECONDS:
+            return path.read_text(encoding="utf-8")
+    except OSError:
+        pass
+    return None
+
+
+def _store_cached_text(url: str, text: str) -> None:
+    path = _cache_path(url)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+    except OSError:
+        pass
 
 POST_RE = re.compile(r"^POST\s+(?P<ref>\d{1,3}(?:/\d{1,3})+)(?![\d/])\s*(?::\s*)?(?P<title>[^:\s].*)$")
 
@@ -96,6 +125,9 @@ class DpsaCircularSource(JobSource):
         )
 
     def fetch_text(self, url: str) -> str:
+        cached = _load_cached_text(url)
+        if cached:
+            return cached
         try:
             resp = requests.get(url, headers=HEADERS, timeout=HTTP_TIMEOUT)
             resp.raise_for_status()
@@ -103,9 +135,12 @@ class DpsaCircularSource(JobSource):
             raise JobSourceError(f"could not download circular: {exc}") from exc
         try:
             with pdfplumber.open(io.BytesIO(resp.content)) as pdf:
-                return "\n".join(page.extract_text() or "" for page in pdf.pages)
+                text = "\n".join(page.extract_text() or "" for page in pdf.pages)
         except Exception as exc:
             raise JobSourceError(f"could not parse circular PDF: {exc}") from exc
+        if text.strip():
+            _store_cached_text(url, text)
+        return text
 
 
 def parse_circular(text: str, source_url: str = "", default_company: str = "") -> list[Job]:

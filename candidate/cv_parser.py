@@ -223,6 +223,39 @@ def _extract_name(lines: list[str]) -> str:
     return ""
 
 
+_SHORT_SKILLS = {"r", "go", "c", "c#", "c++"}
+
+
+def _skill_in_text(skill: str, text: str) -> bool:
+    """Word-boundary match so short names like 'r' or 'go' only fire on
+    standalone tokens — never inside ordinary words."""
+    if skill in _SHORT_SKILLS:
+        return re.search(r"\b" + re.escape(skill) + r"\b", text) is not None
+    return skill in text
+
+
+def _clean_skill_token(item: str) -> str:
+    item = item.strip().strip("*").strip().strip(",")
+    return item
+
+
+def _is_plausible_skill(item: str) -> bool:
+    if not item:
+        return False
+    lowered = item.lower()
+    if len(lowered) > 40:
+        return False
+    if len(lowered) < 2 and lowered not in ("c", "r"):
+        return False
+    if re.fullmatch(r"[^a-zA-Z]*", lowered):
+        return False
+    if re.fullmatch(r"[a-z](?:[a-z0-9]){15,}", lowered):
+        return False
+    if " " in lowered and len(lowered.split()) > 6:
+        return False
+    return True
+
+
 def _extract_skills_from_text(text: str, sections: dict) -> list[str]:
     blob = text.lower()
     skills: list[str] = []
@@ -246,7 +279,7 @@ def _extract_skills_from_text(text: str, sections: dict) -> list[str]:
     ]
 
     for skill in known_skills:
-        if skill.lower() in blob:
+        if _skill_in_text(skill.lower(), blob):
             key = skill.lower()
             if key not in seen:
                 seen.add(key)
@@ -255,13 +288,17 @@ def _extract_skills_from_text(text: str, sections: dict) -> list[str]:
     for header in sections:
         if "skill" in header or "technolog" in header or "competenc" in header:
             for line in sections[header]:
-                for item in re.split(r"[,;|•\-\n]", line):
-                    item = item.strip().strip("*").strip()
-                    if item and len(item) < 50 and item.lower() not in seen:
-                        seen.add(item.lower())
-                        skills.append(item)
+                for item in re.split(r"[,;|•/\n]| {2,}|\s{1}(?=[A-Z][a-z]+ )", line):
+                    cleaned = _clean_skill_token(item)
+                    if not _is_plausible_skill(cleaned):
+                        continue
+                    key = cleaned.lower()
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    skills.append(cleaned)
 
-    return skills
+    return [s for s in skills if _is_plausible_skill(s)]
 
 
 def _extract_education(sections: dict) -> list[Education]:

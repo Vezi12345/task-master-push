@@ -17,74 +17,156 @@
     --green: #4ade80;
     --yellow: #facc15;
     --red: #f87171;
-    --radius: 10px;
+    --radius: 12px;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
   body {
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     background: var(--bg);
     color: var(--text);
-    min-height: 100vh;
     line-height: 1.5;
-  }
-  .container { max-width: 860px; margin: 0 auto; padding: 24px 20px; }
-
-  header {
-    text-align: center;
-    padding: 40px 0 32px;
-  }
-  header h1 {
-    font-size: 1.8rem;
-    font-weight: 700;
-    letter-spacing: -0.5px;
-  }
-  header h1 span { color: var(--accent); }
-  header p {
-    color: var(--muted);
-    margin-top: 6px;
-    font-size: 0.95rem;
-  }
-
-  .search-box {
     display: flex;
-    gap: 10px;
-    margin-bottom: 12px;
+    flex-direction: column;
   }
-  .search-box input {
-    flex: 1;
-    padding: 14px 18px;
-    border-radius: var(--radius);
-    border: 1px solid var(--border);
-    background: var(--surface);
-    color: var(--text);
-    font-size: 1rem;
-    outline: none;
-    transition: border-color 0.2s;
+
+  /* ---------- top bar ---------- */
+  .topbar {
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    padding: 10px 22px;
+    border-bottom: 1px solid var(--border);
+    background: rgba(15,17,23,0.92);
+    backdrop-filter: blur(8px);
+    position: sticky;
+    top: 0;
+    z-index: 50;
   }
-  .search-box input:focus { border-color: var(--accent); }
-  .search-box input::placeholder { color: var(--muted); }
-  .search-box button {
-    padding: 14px 28px;
-    border-radius: var(--radius);
+  .brand { font-weight: 700; font-size: 1.05rem; letter-spacing: -0.3px; white-space: nowrap; }
+  .brand span { color: var(--accent); }
+  .nav { display: flex; gap: 4px; margin-left: 8px; }
+  .nav a, .nav button {
+    padding: 6px 14px;
+    border-radius: 8px;
     border: none;
-    background: var(--accent);
-    color: #fff;
-    font-size: 1rem;
-    font-weight: 600;
+    background: transparent;
+    color: var(--muted);
+    font-size: 0.88rem;
     cursor: pointer;
-    transition: background 0.2s;
+    text-decoration: none;
+    transition: color .15s, background .15s;
+  }
+  .nav a:hover, .nav button:hover { color: var(--text); background: var(--surface2); }
+  .nav .active { color: var(--text); background: var(--surface2); }
+  .topbar-right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+  .cv-chip {
+    font-size: 0.78rem;
+    color: var(--muted);
+    border: 1px solid var(--border);
+    padding: 5px 12px;
+    border-radius: 20px;
+    cursor: pointer;
+    transition: border-color .15s, color .15s;
     white-space: nowrap;
   }
-  .search-box button:hover { background: #5a7aee; }
-  .search-box button:disabled { opacity: 0.5; cursor: not-allowed; }
-
-  .examples {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    margin-bottom: 28px;
+  .cv-chip:hover { border-color: var(--accent); color: var(--text); }
+  .cv-chip.ok { color: var(--green); border-color: rgba(74,222,128,0.35); }
+  .run-btn {
+    padding: 7px 16px;
+    border-radius: 8px;
+    border: 1px solid var(--accent-dim);
+    background: linear-gradient(135deg, rgba(108,140,255,0.14), rgba(108,140,255,0.04));
+    color: var(--accent);
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background .15s;
   }
-  .examples button {
+  .run-btn:hover { background: rgba(108,140,255,0.22); }
+
+  /* ---------- thread ---------- */
+  #thread-wrap {
+    flex: 1;
+    overflow-y: auto;
+    scroll-behavior: smooth;
+  }
+  #thread {
+    max-width: 880px;
+    margin: 0 auto;
+    padding: 28px 20px 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 22px;
+  }
+
+  .turn { display: flex; gap: 12px; align-items: flex-start; }
+  .turn.user { flex-direction: row-reverse; }
+  .avatar {
+    width: 30px; height: 30px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 0.85rem;
+    margin-top: 2px;
+  }
+  .turn.agent .avatar { background: linear-gradient(135deg, var(--accent), #9d6cff); color: #fff; }
+  .turn.user .avatar { background: var(--surface2); border: 1px solid var(--border); color: var(--muted); }
+  .bubble {
+    max-width: calc(100% - 46px);
+    min-width: 0;
+  }
+  .turn.user .bubble {
+    background: var(--accent-dim);
+    border-radius: 14px 14px 4px 14px;
+    padding: 10px 16px;
+    max-width: 75%;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+  }
+  .turn.agent .bubble { width: 100%; }
+  .agent-text {
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    font-size: 0.94rem;
+  }
+  .agent-text + .agent-text { margin-top: 10px; }
+  .agent-note {
+    font-size: 0.8rem;
+    color: var(--muted);
+    margin-top: 8px;
+  }
+  .typing-dots { display: inline-flex; gap: 5px; padding: 6px 2px; }
+  .typing-dots i {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--muted);
+    animation: blink 1.2s infinite both;
+  }
+  .typing-dots i:nth-child(2) { animation-delay: .18s; }
+  .typing-dots i:nth-child(3) { animation-delay: .36s; }
+  @keyframes blink { 0%,80%,100% { opacity:.25 } 40% { opacity:1 } }
+
+  /* ---------- panels inside agent bubbles ---------- */
+  .panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px;
+    margin-top: 12px;
+  }
+  .panel h4 {
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 1.2px;
+    color: var(--muted);
+    margin-bottom: 10px;
+  }
+  .stats-line { font-size: 0.86rem; color: var(--muted); margin-top: 12px; }
+  .stats-line b { color: var(--text); }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+  .chips button {
     padding: 6px 14px;
     border-radius: 20px;
     border: 1px solid var(--border);
@@ -92,1099 +174,765 @@
     color: var(--muted);
     font-size: 0.82rem;
     cursor: pointer;
-    transition: all 0.2s;
+    transition: all 0.15s;
   }
-  .examples button:hover {
-    border-color: var(--accent);
-    color: var(--text);
-  }
+  .chips button:hover { border-color: var(--accent); color: var(--text); }
 
-  .loading {
-    text-align: center;
-    padding: 48px 0;
-    color: var(--muted);
-    display: none;
-  }
-  .loading.active { display: block; }
-  .spinner {
-    width: 32px; height: 32px;
-    border: 3px solid var(--border);
-    border-top-color: var(--accent);
-    border-radius: 50%;
-    animation: spin 0.7s linear infinite;
-    margin: 0 auto 12px;
-  }
-  @keyframes spin { to { transform: rotate(360deg); } }
-
-  .results { display: none; }
-  .results.active { display: block; }
-
-  .intent-card {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 20px;
-    margin-bottom: 20px;
-  }
-  .intent-card h3 {
-    font-size: 0.8rem;
-    text-transform: uppercase;
-    letter-spacing: 1px;
-    color: var(--muted);
-    margin-bottom: 12px;
-  }
-  .intent-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-    gap: 12px;
-  }
-  .intent-field label {
-    display: block;
-    font-size: 0.75rem;
-    color: var(--muted);
-    margin-bottom: 2px;
-  }
-  .intent-field .value {
-    font-size: 0.92rem;
-    font-weight: 500;
-  }
-  .intent-field .value.empty { color: var(--muted); font-style: italic; }
-
-  .stats {
-    display: flex;
-    gap: 16px;
-    margin-bottom: 20px;
-    font-size: 0.88rem;
-    color: var(--muted);
-  }
-  .stats span { color: var(--text); font-weight: 600; }
-
-  .messages {
-    margin-bottom: 20px;
-    font-size: 0.82rem;
-    color: var(--muted);
-  }
-  .messages div { padding: 2px 0; }
-
+  /* ---------- job cards ---------- */
   .job-card {
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: var(--radius);
-    padding: 20px;
-    margin-bottom: 12px;
-    transition: border-color 0.2s;
-  }
-  .job-card:hover { border-color: var(--accent-dim); }
-
-  .job-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-start;
-    gap: 16px;
-    margin-bottom: 10px;
-  }
-  .job-title {
-    font-size: 1.05rem;
-    font-weight: 600;
-  }
-  .job-title a {
-    color: var(--text);
-    text-decoration: none;
-  }
-  .job-title a:hover { color: var(--accent); }
-  .job-company {
-    font-size: 0.9rem;
-    color: var(--muted);
-    margin-top: 2px;
-  }
-  .score-badge {
-    flex-shrink: 0;
-    width: 52px;
-    height: 52px;
-    border-radius: 50%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 0.9rem;
-    font-weight: 700;
-    border: 3px solid;
-  }
-  .score-high { border-color: var(--green); color: var(--green); }
-  .score-mid  { border-color: var(--yellow); color: var(--yellow); }
-  .score-low  { border-color: var(--red); color: var(--red); }
-
-  .job-meta {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 12px;
-    font-size: 0.85rem;
-    color: var(--muted);
-    margin-bottom: 10px;
-  }
-  .job-meta .tag {
-    padding: 2px 10px;
-    border-radius: 14px;
-    background: var(--surface2);
-    font-size: 0.8rem;
-  }
-  .tag-remote { background: #1a3a2a; color: var(--green); }
-  .tag-onsite { background: #3a2a1a; color: var(--yellow); }
-
-  .job-summary {
-    font-size: 0.9rem;
-    color: var(--muted);
-    margin-bottom: 10px;
-    font-style: italic;
-  }
-
-  .job-reasons {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-    gap: 4px 16px;
-    font-size: 0.82rem;
-    color: var(--muted);
-    margin-bottom: 12px;
-  }
-  .job-reasons div { white-space: nowrap; }
-
-  .keep-btn {
-    padding: 6px 16px;
-    border-radius: 6px;
-    border: 1px solid var(--border);
-    background: transparent;
-    color: var(--muted);
-    font-size: 0.82rem;
-    cursor: pointer;
-    transition: all 0.2s;
-  }
-  .keep-btn:hover { border-color: var(--accent); color: var(--accent); }
-  .keep-btn.kept { border-color: var(--green); color: var(--green); pointer-events: none; }
-
-  .apply-btn {
-    padding: 6px 16px;
-    border-radius: 6px;
-    border: 1px solid var(--green);
-    background: transparent;
-    color: var(--green);
-    font-size: 0.82rem;
-    font-weight: 600;
-    cursor: pointer;
-    transition: all 0.2s;
-  }
-  .apply-btn:hover { background: var(--green); color: #000; }
-  .apply-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-  .apply-btn.applied { border-color: var(--muted); color: var(--muted); pointer-events: none; }
-
-  .empty-state {
-    text-align: center;
-    padding: 48px 0;
-    color: var(--muted);
-  }
-  .empty-state .icon { font-size: 2rem; margin-bottom: 8px; }
-
-  .error-msg {
-    background: #2a1a1a;
-    border: 1px solid #5a2a2a;
-    border-radius: var(--radius);
-    padding: 14px 18px;
-    margin-bottom: 20px;
-    color: var(--red);
-    font-size: 0.9rem;
-    display: none;
-  }
-  .error-msg.active { display: block; }
-
-  .cv-section {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 20px;
-    margin-bottom: 24px;
-  }
-  .cv-section h3 {
-    font-size: 0.8rem;
-    text-transform: uppercase;
-    letter-spacing: 1px;
-    color: var(--muted);
-    margin-bottom: 12px;
-  }
-  .cv-upload-row {
-    display: flex;
-    gap: 10px;
-    align-items: center;
-  }
-  .cv-upload-row input[type="file"] {
-    flex: 1;
-    padding: 10px;
-    border-radius: var(--radius);
-    border: 1px solid var(--border);
-    background: var(--surface2);
-    color: var(--text);
-    font-size: 0.9rem;
-  }
-  .cv-upload-row button {
-    padding: 10px 20px;
-    border-radius: var(--radius);
-    border: none;
-    background: var(--accent);
-    color: #fff;
-    font-size: 0.9rem;
-    font-weight: 600;
-    cursor: pointer;
-    white-space: nowrap;
-  }
-  .cv-upload-row button:hover { background: #5a7aee; }
-  .cv-upload-row button:disabled { opacity: 0.5; cursor: not-allowed; }
-  .cv-status {
-    margin-top: 10px;
-    font-size: 0.85rem;
-    color: var(--muted);
-    display: none;
-  }
-  .cv-status.active { display: block; }
-  .cv-status.success { color: var(--green); }
-  .cv-status.error { color: var(--red); }
-  .cv-profile-info {
+    padding: 18px;
     margin-top: 12px;
-    font-size: 0.88rem;
+    transition: border-color .15s;
   }
-  .cv-profile-info .label {
-    color: var(--muted);
-    font-size: 0.78rem;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
+  .job-card:hover { border-color: #3d4454; }
+  .job-header { display: flex; justify-content: space-between; gap: 12px; }
+  .job-title { font-weight: 600; font-size: 1rem; }
+  .job-title a { color: var(--text); text-decoration: none; }
+  .job-title a:hover { color: var(--accent); }
+  .job-company { color: var(--muted); font-size: 0.86rem; margin-top: 2px; }
+  .score-badge {
+    font-weight: 700; font-size: 0.95rem;
+    padding: 4px 12px; border-radius: 8px; height: fit-content;
+    flex-shrink: 0;
+    text-align: center;
   }
-  .cv-profile-info .value {
-    color: var(--text);
-    font-weight: 500;
-    margin-bottom: 6px;
+  .score-badge .badge-cap {
+    display: block;
+    font-size: 0.58rem; font-weight: 500;
+    letter-spacing: 0.5px; text-transform: uppercase;
+    opacity: 0.75; margin-top: 1px;
   }
-  .cv-skills {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-    margin-top: 4px;
-  }
-  .cv-skills .skill-tag {
-    padding: 2px 10px;
-    border-radius: 14px;
+  .score-high { background: rgba(74,222,128,0.14); color: var(--green); }
+  .score-mid  { background: rgba(250,204,21,0.13); color: var(--yellow); }
+  .score-low  { background: rgba(248,113,113,0.12); color: var(--red); }
+  .job-meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+  .tag {
+    font-size: 0.72rem;
+    padding: 3px 9px;
+    border-radius: 12px;
     background: var(--surface2);
-    font-size: 0.8rem;
-    color: var(--text);
+    border: 1px solid var(--border);
+    color: var(--muted);
   }
-
+  .tag-remote { color: var(--green); border-color: rgba(74,222,128,0.3); }
+  .job-summary { margin-top: 10px; font-size: 0.87rem; color: #c6c9d1; }
+  .job-reasons { margin-top: 8px; }
+  .job-reasons div {
+    font-size: 0.78rem; color: var(--muted);
+    padding-left: 14px; position: relative;
+  }
+  .job-reasons div::before { content: '·'; position: absolute; left: 2px; color: var(--accent); }
   .match-section {
-    background: #151a24;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 14px;
-    margin-top: 10px;
-    margin-bottom: 4px;
+    margin-top: 12px; padding-top: 12px;
+    border-top: 1px dashed var(--border);
   }
-  .match-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 8px;
-  }
-  .match-header .label {
-    font-size: 0.78rem;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    color: var(--muted);
-  }
-  .match-badge {
-    font-size: 0.85rem;
-    font-weight: 700;
-    padding: 2px 10px;
-    border-radius: 12px;
-  }
-  .match-high { background: #1a3a2a; color: var(--green); }
-  .match-mid  { background: #3a3a1a; color: var(--yellow); }
-  .match-low  { background: #3a1a1a; color: var(--red); }
-  .match-row {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 4px 10px;
-    font-size: 0.8rem;
-    margin-bottom: 4px;
-  }
-  .match-row .lbl { color: var(--muted); min-width: 60px; }
-  .match-row .val { color: var(--text); }
+  .match-header { display: flex; align-items: center; gap: 10px; }
+  .match-header .label { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); }
+  .match-badge { font-size: 0.82rem; font-weight: 700; padding: 2px 9px; border-radius: 7px; }
+  .match-high { background: rgba(74,222,128,0.14); color: var(--green); }
+  .match-mid  { background: rgba(250,204,21,0.13); color: var(--yellow); }
+  .match-low  { background: rgba(248,113,113,0.12); color: var(--red); }
+  .match-row { display: flex; gap: 8px; margin-top: 8px; font-size: 0.8rem; align-items: baseline; }
+  .match-row .lbl { color: var(--muted); flex-shrink: 0; width: 68px; text-align: right; }
+  .match-row .val { color: #c6c9d1; }
   .match-skill-tag {
-    padding: 1px 8px;
-    border-radius: 10px;
-    font-size: 0.75rem;
+    display: inline-block; padding: 1px 8px; margin: 1px 2px;
+    border-radius: 10px; font-size: 0.74rem;
   }
-  .match-skill-ok { background: #1a3a2a; color: var(--green); }
-  .match-skill-miss { background: #3a2a1a; color: var(--red); }
-  .readiness-row {
-    margin-top: 8px;
-    padding-top: 8px;
-    border-top: 1px solid var(--border);
-    font-size: 0.8rem;
-    color: var(--muted);
-  }
+  .match-skill-ok   { background: rgba(74,222,128,0.1); color: var(--green); }
+  .match-skill-miss { background: rgba(248,113,113,0.09); color: var(--red); }
+  .readiness-row { margin-top: 8px; font-size: 0.8rem; color: var(--muted); }
   .readiness-ready { color: var(--green); font-weight: 600; }
-  .readiness-not { color: var(--yellow); font-weight: 600; }
-
-  .tabs {
-    display: flex;
-    gap: 4px;
-    margin-bottom: 24px;
-    border-bottom: 1px solid var(--border);
-  }
-  .tab-btn {
-    padding: 10px 20px;
-    border: none;
-    background: transparent;
-    color: var(--muted);
-    font-size: 0.9rem;
-    font-weight: 500;
-    cursor: pointer;
-    border-bottom: 2px solid transparent;
-    transition: all 0.2s;
-  }
-  .tab-btn:hover { color: var(--text); }
-  .tab-btn.active {
-    color: var(--accent);
-    border-bottom-color: var(--accent);
-  }
-  .tab-panel { display: none; }
-  .tab-panel.active { display: block; }
-
-  .app-card {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 16px;
-    margin-bottom: 10px;
-  }
-  .app-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 8px;
-  }
-  .app-title { font-size: 0.95rem; font-weight: 600; }
-  .app-company { font-size: 0.85rem; color: var(--muted); }
-  .status-badge {
-    padding: 2px 10px;
-    border-radius: 12px;
-    font-size: 0.75rem;
-    font-weight: 600;
-  }
-  .status-submitted { background: #1a3a2a; color: var(--green); }
-  .status-pending { background: #3a3a1a; color: var(--yellow); }
-  .status-awaiting { background: #1a2a3a; color: var(--accent); }
-  .status-needs { background: #3a2a1a; color: var(--yellow); }
-  .status-failed { background: #3a1a1a; color: var(--red); }
-  .status-draft { background: var(--surface2); color: var(--muted); }
-  .status-manual { background: #2a1a3a; color: #a78bfa; }
-  .app-meta {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 10px;
-    font-size: 0.8rem;
-    color: var(--muted);
-    margin-bottom: 6px;
-  }
-  .app-actions {
-    display: flex;
-    gap: 8px;
-    margin-top: 8px;
-  }
-  .app-actions button {
-    padding: 4px 12px;
-    border-radius: 6px;
-    border: 1px solid var(--border);
-    background: transparent;
-    color: var(--muted);
-    font-size: 0.8rem;
-    cursor: pointer;
-    transition: all 0.2s;
-  }
-  .app-actions button:hover { border-color: var(--accent); color: var(--accent); }
-  .app-actions .approve-btn:hover { border-color: var(--green); color: var(--green); }
-  .app-actions .cancel-btn:hover { border-color: var(--red); color: var(--red); }
-  .app-dimensions {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-    gap: 6px;
-    margin-top: 8px;
-    font-size: 0.8rem;
-  }
+  .readiness-not   { color: var(--yellow); font-weight: 600; }
+  .app-dimensions { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px; margin-top: 10px; }
   .dim-item {
-    display: flex;
-    justify-content: space-between;
-    padding: 4px 8px;
-    background: var(--surface2);
-    border-radius: 6px;
+    display: flex; justify-content: space-between; align-items: center;
+    background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 7px; padding: 5px 10px; font-size: 0.76rem;
   }
-  .dim-item .dim-name { color: var(--muted); }
-  .dim-item .dim-score { font-weight: 600; }
-  .dim-score-high { color: var(--green); }
-  .dim-score-mid { color: var(--yellow); }
-  .dim-score-low { color: var(--red); }
+  .dim-name { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-right: 8px; }
+  .dim-score-high { color: var(--green); font-weight: 600; }
+  .dim-score-mid  { color: var(--yellow); font-weight: 600; }
+  .dim-score-low  { color: var(--red); font-weight: 600; }
+  .card-actions { display: flex; gap: 8px; margin-top: 14px; }
+  .keep-btn, .apply-btn {
+    padding: 8px 18px; border-radius: 8px; font-size: 0.83rem;
+    cursor: pointer; transition: all .15s; font-weight: 500;
+  }
+  .keep-btn { background: transparent; border: 1px solid var(--border); color: var(--muted); }
+  .keep-btn:hover { border-color: var(--accent); color: var(--text); }
+  .keep-btn.kept { border-color: rgba(74,222,128,0.4); color: var(--green); }
+  .apply-btn { background: var(--accent); border: none; color: #fff; font-weight: 600; }
+  .apply-btn:hover { background: #5a7aee; }
+  .apply-btn.applied { background: rgba(74,222,128,0.14); color: var(--green); cursor: default; }
+  .apply-btn:disabled { opacity: .55; cursor: wait; }
 
-  .modal-overlay {
-    display: none;
-    position: fixed;
-    top: 0; left: 0; right: 0; bottom: 0;
-    background: rgba(0,0,0,0.7);
-    z-index: 100;
-    overflow-y: auto;
-    padding: 40px 20px;
+  /* ---------- applications list ---------- */
+  .app-row {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 4px; border-bottom: 1px solid var(--border);
+    font-size: 0.87rem;
   }
-  .modal-overlay.active { display: flex; justify-content: center; align-items: flex-start; }
-  .modal-content {
+  .app-row:last-child { border-bottom: none; }
+  .app-title { font-weight: 500; }
+  .app-co { color: var(--muted); font-size: 0.8rem; }
+  .app-id { color: var(--muted); font-size: 0.72rem; font-family: monospace; }
+  .status-pill {
+    margin-left: auto; flex-shrink: 0;
+    font-size: 0.7rem; padding: 3px 10px; border-radius: 12px;
+    background: var(--surface2); border: 1px solid var(--border); color: var(--muted);
+    text-transform: capitalize;
+  }
+  .status-awaiting_approval { color: var(--yellow); border-color: rgba(250,204,21,0.35); }
+  .status-submitted { color: var(--green); border-color: rgba(74,222,128,0.35); }
+  .status-failed, .status-manual_action_required { color: var(--red); border-color: rgba(248,113,113,0.35); }
+  .status-needs_information { color: var(--accent); border-color: rgba(108,140,255,0.35); }
+
+  /* ---------- approval / forms ---------- */
+  .action-row { display: flex; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
+  .act-btn {
+    padding: 9px 20px; border-radius: 8px; font-size: 0.86rem;
+    font-weight: 600; cursor: pointer; transition: all .15s;
+  }
+  .act-approve { background: var(--green); border: none; color: #052e13; }
+  .act-approve:hover { filter: brightness(1.1); }
+  .act-cancel { background: transparent; border: 1px solid var(--border); color: var(--muted); }
+  .act-cancel:hover { border-color: var(--red); color: var(--red); }
+  .answer-form { display: flex; flex-direction: column; gap: 10px; }
+  .answer-form label { font-size: 0.84rem; color: #c6c9d1; }
+  .answer-form input {
+    width: 100%; padding: 9px 12px; margin-top: 4px;
+    border-radius: 8px; border: 1px solid var(--border);
+    background: var(--bg); color: var(--text); font-size: 0.88rem; outline: none;
+  }
+  .answer-form input:focus { border-color: var(--accent); }
+  .report-list { font-size: 0.85rem; }
+  .report-list li { margin: 4px 0 4px 18px; color: #c6c9d1; }
+  .report-kv { display: flex; justify-content: space-between; padding: 5px 0; font-size: 0.86rem; border-bottom: 1px dashed var(--border); }
+  .report-kv:last-child { border-bottom: none; }
+  .report-kv .k { color: var(--muted); }
+
+  /* ---------- empty state ---------- */
+  .greet { padding: 8vh 20px 0; text-align: center; }
+  .greet h2 { font-size: 1.5rem; letter-spacing: -0.4px; }
+  .greet h2 span { color: var(--accent); }
+  .greet p { color: var(--muted); margin-top: 8px; font-size: 0.92rem; }
+
+  /* ---------- composer ---------- */
+  .composer-wrap {
+    position: sticky;
+    bottom: 0;
+    background: linear-gradient(to top, var(--bg) 65%, transparent);
+    padding: 14px 20px 18px;
+  }
+  .composer {
+    max-width: 880px; margin: 0 auto;
+    display: flex; align-items: flex-end; gap: 10px;
     background: var(--surface);
     border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 28px;
-    max-width: 700px;
-    width: 100%;
-    position: relative;
+    border-radius: 16px;
+    padding: 10px 12px;
+    transition: border-color .15s;
   }
-  .modal-close {
-    position: absolute;
-    top: 16px;
-    right: 16px;
-    background: none;
-    border: none;
-    color: var(--muted);
-    font-size: 1.4rem;
-    cursor: pointer;
+  .composer:focus-within { border-color: var(--accent-dim); }
+  .composer textarea {
+    flex: 1; resize: none; border: none; outline: none;
+    background: transparent; color: var(--text);
+    font-family: inherit; font-size: 0.95rem; line-height: 1.45;
+    max-height: 160px; padding: 6px 4px;
   }
-  .modal-close:hover { color: var(--text); }
-  .modal-section {
-    margin-bottom: 20px;
+  .composer textarea::placeholder { color: var(--muted); }
+  .send-btn {
+    width: 38px; height: 38px; border-radius: 10px; flex-shrink: 0;
+    border: none; background: var(--accent); color: #fff;
+    font-size: 1.05rem; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    transition: background .15s, opacity .15s;
   }
-  .modal-section h4 {
-    font-size: 0.78rem;
-    text-transform: uppercase;
-    letter-spacing: 1px;
-    color: var(--muted);
-    margin-bottom: 8px;
-    padding-bottom: 4px;
-    border-bottom: 1px solid var(--border);
+  .send-btn:hover { background: #5a7aee; }
+  .send-btn:disabled { opacity: .4; cursor: not-allowed; }
+  .composer-hint {
+    max-width: 880px; margin: 6px auto 0;
+    text-align: center; font-size: 0.72rem; color: var(--muted);
   }
-  .modal-section pre {
-    background: var(--surface2);
+
+  /* ---------- modal ---------- */
+  .modal-backdrop {
+    position: fixed; inset: 0; z-index: 100;
+    background: rgba(0,0,0,0.6);
+    display: none; align-items: center; justify-content: center;
+    padding: 20px;
+  }
+  .modal-backdrop.active { display: flex; }
+  .modal {
+    background: var(--surface);
     border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 14px;
-    font-size: 0.85rem;
-    white-space: pre-wrap;
-    word-wrap: break-word;
-    color: var(--text);
-    line-height: 1.6;
+    border-radius: 14px;
+    width: 100%; max-width: 560px;
+    max-height: 84vh; overflow-y: auto;
+    padding: 24px;
   }
-  .modal-qa-item {
-    padding: 6px 0;
-    border-bottom: 1px solid var(--border);
-    font-size: 0.85rem;
-  }
-  .modal-qa-item:last-child { border-bottom: none; }
-  .modal-qa-q { color: var(--text); font-weight: 500; }
-  .modal-qa-a { color: var(--muted); margin-top: 2px; }
-  .modal-qa-a.unanswered { color: var(--yellow); font-style: italic; }
-  .modal-missing-item {
-    padding: 6px 0;
-    border-bottom: 1px solid var(--border);
-    font-size: 0.85rem;
-  }
-  .modal-missing-item:last-child { border-bottom: none; }
-  .modal-missing-q { color: var(--yellow); }
-  .modal-missing-cat { color: var(--muted); font-size: 0.8rem; }
+  .modal h3 { font-size: 1.05rem; margin-bottom: 6px; }
+  .modal .sub { color: var(--muted); font-size: 0.85rem; margin-bottom: 16px; }
 </style>
 </head>
 <body>
-<div class="container">
-  <header>
-    <h1><span>Task Master</span></h1>
-    <p>AI-powered job application agent for South African job seekers</p>
-  </header>
 
-  <div class="tabs">
-    <button class="tab-btn active" onclick="switchTab('search')">Search & Apply</button>
-    <button class="tab-btn" onclick="switchTab('applications')">Applications</button>
-  </div>
-
-  <div class="tab-panel active" id="tab-search">
-
-  <div class="cv-section">
-    <h3>Your CV</h3>
-    <div class="cv-upload-row">
-      <input type="file" id="cv-file" accept=".pdf">
-      <button id="cv-upload-btn" onclick="uploadCV()">Upload CV</button>
-    </div>
-    <div class="cv-status" id="cv-status"></div>
-    <div class="cv-profile-info" id="cv-profile-info" style="display:none"></div>
-  </div>
-
-  <div class="search-box">
-    <input type="text" id="query" placeholder="e.g. entry-level software engineer in Durban, preferably remote" autofocus>
-    <button id="search-btn" onclick="doSearch()">Search</button>
-  </div>
-
-  <div class="examples">
-    <button onclick="fillQuery(this)">Recent CS graduate in Durban, entry-level software jobs, remote preferred</button>
-    <button onclick="fillQuery(this)">Junior data analyst in Cape Town, at least R20k</button>
-    <button onclick="fillQuery(this)">Fully remote Python developer jobs</button>
-    <button onclick="fillQuery(this)">Admin clerk jobs in Johannesburg</button>
-    <button onclick="fillQuery(this)">Finance graduate jobs, at least R15k per month</button>
-  </div>
-
-  <div class="error-msg" id="error"></div>
-  <div class="loading" id="loading">
-    <div class="spinner"></div>
-    Searching and ranking jobs...
-  </div>
-
-  <div class="results" id="results">
-    <div class="intent-card">
-      <h3>What I understood</h3>
-      <div class="intent-grid" id="intent-grid"></div>
-    </div>
-
-    <div class="stats" id="stats"></div>
-    <div class="messages" id="messages"></div>
-
-    <div id="job-list"></div>
-    <div class="empty-state" id="empty-state" style="display:none">
-      <div class="icon">:(</div>
-      <p>No jobs matched your criteria. Try loosening your requirements.</p>
-    </div>
+<div class="topbar">
+  <div class="brand"><span>◆ Task Master</span></div>
+  <nav class="nav">
+    <button class="active" type="button">Agent</button>
+    <a href="/applications">Applications</a>
+    <a href="/profile">My Profile</a>
+  </nav>
+  <div class="topbar-right">
+    <button class="cv-chip" id="cv-chip" type="button" onclick="$('cv-file').click()" title="Upload or replace your CV">⋯ CV</button>
+    <input type="file" id="cv-file" accept=".pdf" style="display:none" onchange="uploadCV(this)">
+    <button class="run-btn" type="button" onclick="openAutopilot()">⚡ Run agent</button>
   </div>
 </div>
 
-  <div class="tab-panel" id="tab-applications">
-    <div id="app-list"></div>
-    <div class="empty-state" id="app-empty" style="display:none">
-      <div class="icon">📋</div>
-      <p>No applications yet. Search and apply to jobs to see them here.</p>
-    </div>
-  </div>
+<div id="thread-wrap">
+  <div id="thread"></div>
 </div>
 
-<div class="modal-overlay" id="detail-modal" onclick="if(event.target===this)closeModal()">
-  <div class="modal-content">
-    <button class="modal-close" onclick="closeModal()">&times;</button>
-    <div id="modal-body"></div>
+<div class="composer-wrap">
+  <div class="composer">
+    <textarea id="input" rows="1" placeholder="Message your job agent…  (e.g. find entry-level developer jobs near me)"
+      autofocus></textarea>
+    <button class="send-btn" id="send" onclick="sendCurrent()" title="Send">➤</button>
+  </div>
+  <div class="composer-hint">Task Master prepares applications for your review — nothing is ever submitted without your approval.</div>
+</div>
+
+<div class="modal-backdrop" id="autopilot-modal">
+  <div class="modal">
+    <h3>⚡ Autopilot run</h3>
+    <p class="sub">The agent will search using your profile, score every listing against hard requirements, prepare applications — and stop before submitting anything.</p>
+    <div id="autopilot-report"></div>
+    <div class="action-row">
+      <button class="act-btn act-approve" id="ap-dry" onclick="runAutopilot(true)">Dry run first</button>
+      <button class="act-btn act-cancel" onclick="closeAutopilot()">Close</button>
+      <button class="act-btn act-approve" id="ap-real" onclick="runAutopilot(false)" style="display:none">Run for real</button>
+    </div>
   </div>
 </div>
 
 <script>
 const $ = id => document.getElementById(id);
+const threadEl = $('thread'), inputEl = $('input'), sendBtn = $('send');
+let busy = false;
 
-$('query').addEventListener('keydown', e => { if (e.key === 'Enter') doSearch(); });
+/* ---------------- helpers ---------------- */
 
-function fillQuery(btn) {
-  $('query').value = btn.textContent;
-  doSearch();
+function esc(s) {
+  const d = document.createElement('div');
+  d.textContent = s == null ? '' : String(s);
+  return d.innerHTML;
 }
 
-async function doSearch() {
-  const q = $('query').value.trim();
-  if (!q) return;
+function scrollBottom() {
+  const w = $('thread-wrap');
+  w.scrollTop = w.scrollHeight;
+}
 
-  $('error').className = 'error-msg';
-  $('results').className = 'results';
-  $('loading').className = 'loading active';
-  $('search-btn').disabled = true;
+function addUserTurn(text) {
+  const el = document.createElement('div');
+  el.className = 'turn user';
+  el.innerHTML = `<div class="bubble">${esc(text)}</div><div class="avatar">You</div>`;
+  threadEl.appendChild(el);
+  scrollBottom();
+}
 
+function addAgentShell() {
+  const el = document.createElement('div');
+  el.className = 'turn agent';
+  el.innerHTML = `<div class="avatar">◆</div><div class="bubble"></div>`;
+  threadEl.appendChild(el);
+  return el.querySelector('.bubble');
+}
+
+function addTyping() {
+  const b = addAgentShell();
+  b.innerHTML = '<div class="typing-dots"><i></i><i></i><i></i></div>';
+  scrollBottom();
+  return b;
+}
+
+function agentText(bubble, text) {
+  if (!text) return;
+  const d = document.createElement('div');
+  d.className = 'agent-text';
+  d.innerHTML = esc(text);
+  bubble.appendChild(d);
+}
+
+function agentNote(bubble, notes) {
+  if (!notes || !notes.length) return;
+  const d = document.createElement('div');
+  d.className = 'agent-note';
+  d.textContent = notes.join(' · ');
+  bubble.appendChild(d);
+}
+
+/* ---------------- send / receive ---------------- */
+
+async function sendCurrent() {
+  const text = inputEl.value.trim();
+  if (!text || busy) return;
+  inputEl.value = '';
+  autosize();
+  await sendChat(text);
+}
+
+async function sendChat(text, bubbleOverride) {
+  busy = true;
+  sendBtn.disabled = true;
+  if (!bubbleOverride) addUserTurn(text);
+  const bubble = bubbleOverride || addTyping();
   try {
-    const resp = await fetch('/api/search', {
+    const resp = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query: q }),
+      body: JSON.stringify({ message: text }),
     });
     const data = await resp.json();
-    if (!resp.ok) {
-      showError(data.error || 'Search failed');
-      return;
+    if (!resp.ok && !data.reply) {
+      bubble.innerHTML = '';
+      agentText(bubble, data.error || 'Something went wrong.');
+      scrollBottom();
+      return data;
     }
-    renderResults(data);
+    renderAgentTurn(bubble, data);
   } catch (err) {
-    showError('Network error: ' + err.message);
+    bubble.innerHTML = '';
+    agentText(bubble, 'Network error: ' + err.message);
+    scrollBottom();
   } finally {
-    $('loading').className = 'loading';
-    $('search-btn').disabled = false;
+    busy = false;
+    sendBtn.disabled = false;
+    inputEl.focus();
   }
+  return null;
 }
 
-function showError(msg) {
-  $('error').textContent = msg;
-  $('error').className = 'error-msg active';
+function renderAgentTurn(bubble, data) {
+  bubble.innerHTML = '';
+  agentText(bubble, data.reply);
+
+  if (data.ranked !== undefined) {
+    renderSearchBlock(bubble, data);
+  }
+  if ((data.applications && data.applications.length)) {
+    renderApplicationsPanel(bubble, data.applications, 'Prepared for your review');
+  }
+  if (data.application_summaries && data.application_summaries.length &&
+      !(data.applications && data.applications.length)) {
+    renderApplicationsPanel(bubble, data.application_summaries, 'Your applications');
+  }
+  if (data.needs_answers && data.missing_information && data.missing_information.length) {
+    renderAnswersForm(bubble, data.missing_information);
+  }
+  if (data.awaiting_approval && data.applications && data.applications.length) {
+    renderApprovalButtons(bubble);
+  }
+  agentNote(bubble, data.notes);
+  scrollBottom();
 }
 
-function renderResults(data) {
-  const q = data.query;
-  const grid = $('intent-grid');
-  grid.innerHTML = [
-    field('Roles', q.roles.length ? q.roles.join(', ') : null),
-    field('Seniority', q.seniority || null),
-    field('Locations', q.locations.length ? q.locations.map(l => l.city + ' (' + l.radius_km + ' km)').join(', ') : null),
-    field('Remote', { any: 'Any', preferred: 'Preferred', required: 'Required', no: 'On-site only' }[q.remote] || q.remote),
-    field('Min Salary', q.min_salary ? q.currency + ' ' + q.min_salary.toLocaleString() : null),
-    field('Skills', q.skills.length ? q.skills.join(', ') : null),
-    field('Keywords', q.keywords.length ? q.keywords.join(', ') : null),
-  ].join('');
+/* ---------------- search results ---------------- */
 
-  $('stats').innerHTML = `<span>${data.jobs_found}</span> jobs found &nbsp;→&nbsp; <span>${data.ranked.length}</span> after filtering`;
+function renderSearchBlock(bubble, data) {
+  const found = data.jobs_found || 0;
+  const ranked = data.ranked || [];
+  const stats = document.createElement('div');
+  stats.className = 'stats-line';
+  stats.innerHTML = `<b>${found}</b> listings from sources &nbsp;→&nbsp; <b>${ranked.length}</b> match` +
+    (data.filtered_out > 0 ? ` &nbsp;·&nbsp; ${data.filtered_out} filtered out by role gates` : '');
+  bubble.appendChild(stats);
 
-  $('messages').innerHTML = data.messages.map(m => `<div>${esc(m)}</div>`).join('');
-
-  const list = $('job-list');
-  const empty = $('empty-state');
-  if (!data.ranked.length) {
-    list.innerHTML = '';
-    empty.style.display = '';
-    $('results').className = 'results active';
+  if (!ranked.length) {
+    renderNoMatches(bubble, data);
     return;
   }
-  empty.style.display = 'none';
-
-  list.innerHTML = data.ranked.map((j, i) => {
-    const cls = j.score >= 75 ? 'score-high' : j.score >= 50 ? 'score-mid' : 'score-low';
-    const remoteTag = j.remote ? '<span class="tag tag-remote">Remote</span>' : '<span class="tag tag-onsite">On-site</span>';
-    const salaryTag = j.salary_min ? `<span class="tag">R${j.salary_min.toLocaleString()}/mo</span>` : j.salary_text ? `<span class="tag">${esc(j.salary_text)}</span>` : '';
-    const link = j.url ? `<a href="${esc(j.url)}" target="_blank" rel="noopener">${esc(j.title)}</a>` : esc(j.title);
-    const matchHtml = j.candidate_match ? renderCandidateMatch(j.candidate_match, j.readiness) : '';
-    const detailedHtml = j.detailed_match ? renderDetailedMatch(j.detailed_match) : '';
-    return `
-      <div class="job-card">
-        <div class="job-header">
-          <div>
-            <div class="job-title">${link}</div>
-            <div class="job-company">${esc(j.company)}</div>
-          </div>
-          <div class="score-badge ${cls}">${j.score}%</div>
-        </div>
-        <div class="job-meta">
-          <span class="tag">${esc(j.location)}</span>
-          ${remoteTag}
-          ${salaryTag}
-          <span class="tag">${esc(j.source)}</span>
-        </div>
-        ${j.summary ? `<div class="job-summary">${esc(j.summary)}</div>` : ''}
-        <div class="job-reasons">${j.reasons.map(r => `<div>${esc(r)}</div>`).join('')}</div>
-        ${matchHtml}
-        ${detailedHtml}
-        <button class="keep-btn" id="keep-${i}" onclick="keepJob(${i}, this)">Keep this job</button>
-        <button class="apply-btn" id="apply-${i}" onclick="applyJob(${i}, this)">Apply</button>
-      </div>`;
-  }).join('');
-
-  window._ranked = data.ranked;
-  $('results').className = 'results active';
+  ranked.forEach(j => bubble.appendChild(jobCard(j)));
+  window._chatRanked = ranked;
 }
 
-async function keepJob(idx, btn) {
-  const j = window._ranked[idx];
-  btn.textContent = 'Keeping...';
-  try {
-    await fetch('/api/keep', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        title: j.title, company: j.company, location: j.location,
-        remote: j.remote, salary_text: j.salary_text, url: j.url, source: j.source,
-      }),
-    });
-    btn.textContent = 'Kept!';
-    btn.className = 'keep-btn kept';
-  } catch {
-    btn.textContent = 'Keep this job';
+function renderNoMatches(bubble, data) {
+  const found = data.jobs_found || 0;
+  if (found === 0) {
+    agentText(bubble, 'Your sources returned no listings at all this time — try again later.');
+    return;
+  }
+  const p = document.createElement('div');
+  p.className = 'agent-text';
+  p.style.color = 'var(--muted)';
+  p.textContent = `None of those ${found} listings match this request — that role may not be in this week's listings.`;
+  bubble.appendChild(p);
+  const related = data.related || [];
+  if (related.length) {
+    const panel = document.createElement('div');
+    panel.className = 'panel';
+    panel.innerHTML = '<h4>Roles your sources DO have this week</h4>';
+    const chips = document.createElement('div');
+    chips.className = 'chips';
+    chips.style.marginTop = '0';
+    chips.innerHTML = related.map(r =>
+      `<button data-q="${esc(r.label)} jobs">${esc(r.label)} (${r.count})</button>`
+    ).join('');
+    chips.querySelectorAll('button').forEach(btn =>
+      btn.addEventListener('click', () => quickSend(btn.dataset.q))
+    );
+    panel.appendChild(chips);
+    bubble.appendChild(panel);
   }
 }
 
-async function applyJob(idx, btn) {
-  const j = window._ranked[idx];
-  btn.textContent = 'Applying...';
-  btn.disabled = true;
-  try {
-    const resp = await fetch('/api/apply', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        job: {
-          id: j.url || j.title + '_' + j.company,
-          title: j.title,
-          company: j.company,
-          location: j.location,
-          url: j.url,
-          source: j.source,
-          description: j.summary || '',
-          salary_min: j.salary_min,
-          salary_text: j.salary_text,
-          remote: j.remote,
-          score: j.score,
-        },
-      }),
-    });
-    const data = await resp.json();
-    if (resp.ok && data.ok) {
-      btn.textContent = 'Applied!';
-      btn.className = 'apply-btn applied';
-    } else {
-      btn.textContent = data.error || 'Failed';
-      btn.disabled = false;
-    }
-  } catch (err) {
-    btn.textContent = 'Error';
-    btn.disabled = false;
-  }
+function jobCard(j) {
+  const card = document.createElement('div');
+  card.className = 'job-card';
+  const cls = j.score >= 75 ? 'score-high' : j.score >= 50 ? 'score-mid' : 'score-low';
+  const remoteTag = j.remote ? '<span class="tag tag-remote">Remote</span>' : '<span class="tag tag-onsite">On-site</span>';
+  const salaryTag = j.salary_min
+    ? `<span class="tag">R${j.salary_min.toLocaleString()}/mo</span>`
+    : (j.salary_text ? `<span class="tag">${esc(j.salary_text)}</span>` : '');
+  const link = j.url ? `<a href="${esc(j.url)}" target="_blank" rel="noopener">${esc(j.title)}</a>` : esc(j.title);
+  card.innerHTML = `
+    <div class="job-header">
+      <div style="min-width:0">
+        <div class="job-title">${link}</div>
+        <div class="job-company">${esc(j.company)}</div>
+      </div>
+      <div class="score-badge ${cls}">${j.score}%<span class="badge-cap">query fit</span></div>
+    </div>
+    <div class="job-meta">
+      <span class="tag">${esc(j.location)}</span>${remoteTag}${salaryTag}
+      <span class="tag">${esc(j.source)}</span>
+    </div>
+    ${j.summary ? `<div class="job-summary">${esc(j.summary)}</div>` : ''}
+    ${j.reasons && j.reasons.length ? `<div class="job-reasons">${j.reasons.map(r => `<div>${esc(r)}</div>`).join('')}</div>` : ''}
+    ${j.candidate_match ? candidateMatchHtml(j.candidate_match, j.readiness) : ''}
+    ${j.detailed_match ? detailedMatchHtml(j.detailed_match) : ''}
+    <div class="card-actions">
+      <button class="keep-btn">Keep this job</button>
+      ${j.url ? '<button class="apply-btn">Prepare application</button>' : ''}
+    </div>`;
+
+  const keepBtn = card.querySelector('.keep-btn');
+  keepBtn.addEventListener('click', () => keepJob(j, keepBtn));
+  const applyBtn = card.querySelector('.apply-btn');
+  if (applyBtn) applyBtn.addEventListener('click', () => applyJob(j, applyBtn));
+  return card;
 }
 
-function field(label, value) {
-  return `<div class="intent-field"><label>${label}</label><div class="value ${value ? '' : 'empty'}">${value || 'not specified'}</div></div>`;
-}
-
-function renderCandidateMatch(match, readiness) {
+function candidateMatchHtml(match, readiness) {
   const mcls = match.score >= 70 ? 'match-high' : match.score >= 40 ? 'match-mid' : 'match-low';
   let html = '<div class="match-section">';
-  html += '<div class="match-header"><span class="label">Candidate Match</span>';
-  html += `<span class="match-badge ${mcls}">${match.score}%</span></div>`;
+  html += `<div class="match-header"><span class="label">Your match — can you do this job?</span><span class="match-badge ${mcls}">${match.score}%</span></div>`;
   if (match.matched_skills && match.matched_skills.length) {
-    html += '<div class="match-row"><span class="lbl">Matched:</span><span class="val">';
-    html += match.matched_skills.map(s => `<span class="match-skill-tag match-skill-ok">${esc(s)}</span>`).join(' ');
-    html += '</span></div>';
+    html += '<div class="match-row"><span class="lbl">Matched:</span><span class="val">' +
+      match.matched_skills.map(s => `<span class="match-skill-tag match-skill-ok">${esc(s)}</span>`).join(' ') +
+      '</span></div>';
   }
   if (match.missing_skills && match.missing_skills.length) {
-    html += '<div class="match-row"><span class="lbl">Missing:</span><span class="val">';
-    html += match.missing_skills.map(s => `<span class="match-skill-tag match-skill-miss">${esc(s)}</span>`).join(' ');
-    html += '</span></div>';
-  }
-  if (match.strengths && match.strengths.length) {
-    html += '<div class="match-row"><span class="lbl">Strengths:</span><span class="val">';
-    html += match.strengths.map(s => esc(s)).join(' &middot; ');
-    html += '</span></div>';
-  }
-  if (match.concerns && match.concerns.length) {
-    html += '<div class="match-row"><span class="lbl">Gaps:</span><span class="val">';
-    html += match.concerns.map(s => esc(s)).join(' &middot; ');
-    html += '</span></div>';
+    html += '<div class="match-row"><span class="lbl">Missing:</span><span class="val">' +
+      match.missing_skills.map(s => `<span class="match-skill-tag match-skill-miss">${esc(s)}</span>`).join(' ') +
+      '</span></div>';
   }
   if (readiness) {
     const rcls = readiness.ready ? 'readiness-ready' : 'readiness-not';
     const rtext = readiness.ready ? 'Ready to apply' : 'Not ready yet';
     html += `<div class="readiness-row"><span class="${rcls}">${rtext}</span>`;
-    if (readiness.warnings && readiness.warnings.length) {
+    if (readiness.warnings && readiness.warnings.length)
       html += ' — ' + readiness.warnings.map(w => esc(w)).join('; ');
-    }
-    if (readiness.blockers && readiness.blockers.length) {
+    if (readiness.blockers && readiness.blockers.length)
       html += ' — ' + readiness.blockers.map(b => esc(b)).join('; ');
-    }
     html += '</div>';
   }
-  html += '</div>';
-  return html;
+  return html + '</div>';
 }
 
-function esc(s) {
-  const d = document.createElement('div');
-  d.textContent = s;
-  return d.innerHTML;
-}
-
-async function uploadCV() {
-  const fileInput = $('cv-file');
-  const file = fileInput.files[0];
-  if (!file) {
-    showCvStatus('Please select a PDF file.', 'error');
-    return;
-  }
-  if (!file.name.toLowerCase().endsWith('.pdf')) {
-    showCvStatus('Only PDF files are supported.', 'error');
-    return;
-  }
-
-  $('cv-upload-btn').disabled = true;
-  showCvStatus('Uploading and parsing CV...', '');
-
-  const formData = new FormData();
-  formData.append('cv', file);
-
-  try {
-    const resp = await fetch('/api/upload-cv', {
-      method: 'POST',
-      body: formData,
-    });
-    const data = await resp.json();
-    if (!resp.ok) {
-      showCvStatus(data.error || 'Upload failed', 'error');
-      return;
-    }
-    showCvStatus('CV uploaded successfully', 'success');
-    renderCvProfile(data.profile);
-  } catch (err) {
-    showCvStatus('Network error: ' + err.message, 'error');
-  } finally {
-    $('cv-upload-btn').disabled = false;
-  }
-}
-
-function showCvStatus(msg, cls) {
-  const el = $('cv-status');
-  el.textContent = msg;
-  el.className = 'cv-status active' + (cls ? ' ' + cls : '');
-}
-
-function renderCvProfile(profile) {
-  const el = $('cv-profile-info');
-  if (!profile) { el.style.display = 'none'; return; }
-  let html = '';
-  if (profile.name) html += `<div class="label">Name</div><div class="value">${esc(profile.name)}</div>`;
-  if (profile.email) html += `<div class="label">Email</div><div class="value">${esc(profile.email)}</div>`;
-  if (profile.location) html += `<div class="label">Location</div><div class="value">${esc(profile.location)}</div>`;
-  if (profile.education && profile.education.length) {
-    const edu = profile.education[0];
-    const bits = [edu.qualification, edu.field, edu.institution].filter(Boolean);
-    if (bits.length) html += `<div class="label">Education</div><div class="value">${esc(bits.join(' — '))}</div>`;
-  }
-  if (profile.skills && profile.skills.length) {
-    html += `<div class="label">Skills</div><div class="cv-skills">${profile.skills.map(s => '<span class="skill-tag">' + esc(s) + '</span>').join('')}</div>`;
-  }
-  el.innerHTML = html;
-  el.style.display = html ? '' : 'none';
-}
-
-window.addEventListener('DOMContentLoaded', async () => {
-  try {
-    const resp = await fetch('/api/profile');
-    const data = await resp.json();
-    if (data.profile) {
-      renderCvProfile(data.profile);
-      showCvStatus('CV already uploaded', 'success');
-    }
-  } catch {}
-  loadApplications();
-});
-
-function switchTab(name) {
-  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
-  if (name === 'search') {
-    document.querySelector('.tab-btn:nth-child(1)').classList.add('active');
-    $('tab-search').classList.add('active');
-  } else {
-    document.querySelector('.tab-btn:nth-child(2)').classList.add('active');
-    $('tab-applications').classList.add('active');
-    loadApplications();
-  }
-}
-
-async function loadApplications() {
-  try {
-    const resp = await fetch('/api/applications');
-    const data = await resp.json();
-    renderApplications(data.applications, data.summary);
-  } catch (err) {
-    $('app-list').innerHTML = '<div class="error-msg active">Failed to load applications</div>';
-  }
-}
-
-function renderApplications(apps, summary) {
-  const list = $('app-list');
-  const empty = $('app-empty');
-  if (!apps || !apps.length) {
-    list.innerHTML = '';
-    empty.style.display = '';
-    return;
-  }
-  empty.style.display = 'none';
-
-  let html = '';
-  if (summary) {
-    html += `<div class="intent-card" style="margin-bottom:16px">
-      <h3>Summary</h3>
-      <div class="stats">
-        <span>${summary.total}</span> total &nbsp;
-        ${Object.entries(summary.by_status || {}).map(([s, c]) => `<span>${c}</span> ${s}`).join(' &nbsp; ')}
-      </div>
-    </div>`;
-  }
-
-  html += apps.map(a => {
-    const statusCls = getStatusClass(a.status);
-    const canApprove = a.status === 'awaiting_approval';
-    const canCancel = a.status === 'awaiting_approval' || a.status === 'needs_information';
-    return `
-      <div class="app-card">
-        <div class="app-header">
-          <div>
-            <div class="app-title">${esc(a.role || 'Unknown')}</div>
-            <div class="app-company">${esc(a.company || 'Unknown')}</div>
-          </div>
-          <span class="status-badge ${statusCls}">${esc(a.status)}</span>
-        </div>
-        <div class="app-meta">
-          <span>${esc(a.location || 'N/A')}</span>
-          <span>Match: ${a.candidate_match_score}%</span>
-          <span>Priority: ${a.application_priority}%</span>
-          ${a.platform ? `<span>${esc(a.platform)}</span>` : ''}
-        </div>
-        ${a.submitted ? `<div class="app-meta"><span>Submitted: ${esc(a.date_submitted || a.submission_time || 'N/A')}</span></div>` : ''}
-        ${a.warnings && a.warnings.length ? `<div class="app-meta"><span style="color:var(--yellow)">${a.warnings.map(w => esc(w)).join('; ')}</span></div>` : ''}
-        ${a.errors && a.errors.length ? `<div class="app-meta"><span style="color:var(--red)">${a.errors.map(e => esc(e)).join('; ')}</span></div>` : ''}
-        ${a.missing_information && a.missing_information.length ? `<div class="app-meta"><span style="color:var(--yellow)">Needs: ${a.missing_information.map(m => esc(m.question)).join('; ')}</span></div>` : ''}
-        <div class="app-actions">
-          ${canApprove ? `<button class="approve-btn" onclick="approveApp('${esc(a.id)}', this)">Approve</button>` : ''}
-          ${canCancel ? `<button class="cancel-btn" onclick="cancelApp('${esc(a.id)}', this)">Cancel</button>` : ''}
-          <button onclick="showAppDetail('${esc(a.id)}')">View Details</button>
-          ${a.url ? `<a href="${esc(a.url)}" target="_blank" style="padding:4px 12px;font-size:0.8rem;color:var(--muted)">View Job</a>` : ''}
-        </div>
-      </div>`;
-  }).join('');
-
-  list.innerHTML = html;
-}
-
-function getStatusClass(status) {
-  const map = {
-    submitted: 'status-submitted',
-    pending: 'status-pending',
-    awaiting_approval: 'status-awaiting',
-    needs_information: 'status-needs',
-    failed: 'status-failed',
-    draft: 'status-draft',
-    manual_action_required: 'status-manual',
-    discovering: 'status-draft',
-    selected: 'status-draft',
-    preparing: 'status-pending',
-    ready_for_review: 'status-awaiting',
-    submitting: 'status-pending',
-    interview: 'status-submitted',
-    rejected: 'status-failed',
-    withdrawn: 'status-draft',
-    offer: 'status-submitted',
-  };
-  return map[status] || 'status-draft';
-}
-
-async function approveApp(appId, btn) {
-  btn.textContent = 'Approving...';
-  btn.disabled = true;
-  try {
-    const resp = await fetch('/api/applications/' + appId + '/approve', { method: 'POST' });
-    const data = await resp.json();
-    if (resp.ok && data.ok) {
-      loadApplications();
-    } else {
-      btn.textContent = data.error || 'Failed';
-      btn.disabled = false;
-    }
-  } catch (err) {
-    btn.textContent = 'Failed';
-    btn.disabled = false;
-  }
-}
-
-async function cancelApp(appId, btn) {
-  btn.textContent = 'Cancelling...';
-  btn.disabled = true;
-  try {
-    const resp = await fetch('/api/applications/' + appId + '/cancel', { method: 'POST' });
-    const data = await resp.json();
-    if (resp.ok && data.ok) {
-      loadApplications();
-    } else {
-      btn.textContent = data.error || 'Failed';
-      btn.disabled = false;
-    }
-  } catch (err) {
-    btn.textContent = 'Failed';
-    btn.disabled = false;
-  }
-}
-
-async function showAppDetail(appId) {
-  const modal = $('detail-modal');
-  const body = $('modal-body');
-  body.innerHTML = '<div style="text-align:center;padding:20px;color:var(--muted)">Loading...</div>';
-  modal.className = 'modal-overlay active';
-
-  try {
-    const resp = await fetch('/api/applications/' + appId);
-    const data = await resp.json();
-    if (!resp.ok || !data.application) {
-      body.innerHTML = '<p style="color:var(--red)">Application not found</p>';
-      return;
-    }
-    const a = data.application;
-    let html = `<h3 style="margin-bottom:4px">${esc(a.role)}</h3>`;
-    html += `<div style="color:var(--muted);margin-bottom:16px">${esc(a.company)} — ${esc(a.location)}</div>`;
-
-    if (a.documents && a.documents.cover_letter_text) {
-      html += '<div class="modal-section"><h4>Cover Letter</h4>';
-      html += `<pre>${esc(a.documents.cover_letter_text)}</pre>`;
-      html += '</div>';
-    }
-
-    const answerKeys = Object.keys(a.answers || {});
-    if (answerKeys.length) {
-      html += '<div class="modal-section"><h4>Answers</h4>';
-      for (const k of answerKeys) {
-        html += `<div class="modal-qa-item"><div class="modal-qa-q">${esc(k)}</div><div class="modal-qa-a">${esc(a.answers[k])}</div></div>`;
-      }
-      html += '</div>';
-    }
-
-    if (a.missing_information && a.missing_information.length) {
-      html += '<div class="modal-section"><h4>Missing Information</h4>';
-      for (const m of a.missing_information) {
-        html += `<div class="modal-missing-item"><div class="modal-missing-q">${esc(m.question)}</div>`;
-        if (m.category) html += `<div class="modal-missing-cat">${esc(m.category)}</div>`;
-        html += '</div>';
-      }
-      html += '</div>';
-    }
-
-    if (a.documents) {
-      html += '<div class="modal-section"><h4>Documents Status</h4>';
-      html += `<div style="font-size:0.85rem">`;
-      html += `<div>CV ready: ${a.documents.cv_ready ? '<span style="color:var(--green)">Yes</span>' : '<span style="color:var(--yellow)">No</span>'}</div>`;
-      html += `<div>Cover letter ready: ${a.documents.cover_letter_ready ? '<span style="color:var(--green)">Yes</span>' : '<span style="color:var(--yellow)">No</span>'}</div>`;
-      if (a.documents.tailored_summary) {
-        html += `<div style="margin-top:8px"><strong>Tailored summary:</strong><br>${esc(a.documents.tailored_summary)}</div>`;
-      }
-      html += '</div></div>';
-    }
-
-    if (a.notes && a.notes.length) {
-      html += '<div class="modal-section"><h4>Notes</h4>';
-      html += a.notes.map(n => `<div style="font-size:0.85rem;color:var(--muted);padding:2px 0">${esc(n)}</div>`).join('');
-      html += '</div>';
-    }
-
-    if (a.job_description) {
-      html += '<div class="modal-section"><h4>Job Description</h4>';
-      html += `<pre>${esc(a.job_description)}</pre>`;
-      html += '</div>';
-    }
-
-    body.innerHTML = html;
-  } catch (err) {
-    body.innerHTML = '<p style="color:var(--red)">Failed to load details</p>';
-  }
-}
-
-function closeModal() {
-  $('detail-modal').className = 'modal-overlay';
-}
-
-function renderDetailedMatch(detailed) {
+function detailedMatchHtml(detailed) {
   if (!detailed || !detailed.dimensions) return '';
   let html = '<div class="app-dimensions">';
   html += detailed.dimensions.map(d => {
     const cls = d.score >= 75 ? 'dim-score-high' : d.score >= 50 ? 'dim-score-mid' : 'dim-score-low';
     return `<div class="dim-item"><span class="dim-name">${esc(d.name)}</span><span class="dim-score ${cls}">${d.score}%</span></div>`;
   }).join('');
-  html += '</div>';
-  return html;
+  return html + '</div>';
 }
+
+async function keepJob(j, btn) {
+  btn.textContent = 'Keeping…';
+  try {
+    await fetch('/api/keep', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        title: j.title, company: j.company, location: j.location,
+        remote: j.remote, salary_text: j.salary_text, url: j.url, source: j.source,
+      }),
+    });
+    btn.textContent = 'Kept ✓';
+    btn.classList.add('kept');
+  } catch { btn.textContent = 'Keep this job'; }
+}
+
+async function applyJob(j, btn) {
+  btn.textContent = 'Preparing…'; btn.disabled = true;
+  try {
+    const resp = await fetch('/api/apply', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ job: {
+        id: j.url || j.title + '_' + j.company,
+        title: j.title, company: j.company, location: j.location,
+        url: j.url, source: j.source, description: j.summary || '',
+        salary_min: j.salary_min, salary_text: j.salary_text,
+        remote: j.remote, score: j.score,
+      }}),
+    });
+    const data = await resp.json();
+    if (resp.ok && data.ok) {
+      btn.textContent = 'Prepared ✓ review in Applications';
+      btn.classList.add('applied');
+    } else {
+      btn.textContent = data.error || 'Failed';
+      btn.disabled = false;
+    }
+  } catch { btn.textContent = 'Error'; btn.disabled = false; }
+}
+
+/* ---------------- applications panel ---------------- */
+
+function renderApplicationsPanel(bubble, apps, heading) {
+  const panel = document.createElement('div');
+  panel.className = 'panel';
+  panel.innerHTML = `<h4>${esc(heading)} · ${apps.length}</h4>`;
+  apps.forEach(a => {
+    const row = document.createElement('div');
+    row.className = 'app-row';
+    const status = (a.status || '').toString().toLowerCase().replace(/_/g, '_');
+    row.innerHTML = `
+      <div style="min-width:0">
+        <div class="app-title">${esc(a.job_title || '')} <span class="app-id">#${esc(a.id || '')}</span></div>
+        <div class="app-co">${esc(a.job_company || '')}${a.job_location ? ' · ' + esc(a.job_location) : ''}</div>
+      </div>
+      <span class="status-pill status-${esc(status)}">${esc((a.status || '').replace(/_/g, ' '))}</span>`;
+    panel.appendChild(row);
+  });
+  bubble.appendChild(panel);
+}
+
+/* ---------------- approval & answers ---------------- */
+
+function renderApprovalButtons(bubble) {
+  const row = document.createElement('div');
+  row.className = 'action-row';
+  row.innerHTML = `
+    <button class="act-btn act-approve">✓ Approve all</button>
+    <button class="act-btn act-cancel">✕ Cancel all</button>`;
+  row.querySelector('.act-approve').addEventListener('click', e => {
+    e.target.disabled = true;
+    quickSend('approve all applications');
+  });
+  row.querySelector('.act-cancel').addEventListener('click', e => {
+    e.target.disabled = true;
+    quickSend('cancel all applications');
+  });
+  bubble.appendChild(row);
+}
+
+function renderAnswersForm(bubble, missing) {
+  const panel = document.createElement('div');
+  panel.className = 'panel';
+  panel.innerHTML = '<h4>I need a few details</h4>';
+  const form = document.createElement('div');
+  form.className = 'answer-form';
+  missing.forEach(m => {
+    const wrap = document.createElement('div');
+    wrap.innerHTML = `<label>${esc(m.question)}</label><input data-key="${esc(m.field_key)}" autocomplete="off">`;
+    form.appendChild(wrap);
+  });
+  const submit = document.createElement('button');
+  submit.className = 'act-btn act-approve';
+  submit.textContent = 'Submit answers';
+  submit.style.alignSelf = 'flex-start';
+  submit.addEventListener('click', async () => {
+    const answers = {};
+    form.querySelectorAll('input').forEach(inp => {
+      if (inp.value.trim()) answers[inp.dataset.key] = inp.value.trim();
+    });
+    if (!Object.keys(answers).length) return;
+    submit.disabled = true;
+    busy = true; sendBtn.disabled = true;
+    const nb = addTyping();
+    try {
+      const resp = await fetch('/api/chat/answers', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ answers }),
+      });
+      const data = await resp.json();
+      renderAgentTurn(nb, data);
+    } catch (err) {
+      nb.innerHTML = '';
+      agentText(nb, 'Network error: ' + err.message);
+    } finally {
+      busy = false; sendBtn.disabled = false;
+    }
+  });
+  form.appendChild(submit);
+  panel.appendChild(form);
+  bubble.appendChild(panel);
+}
+
+/* ---------------- autopilot ---------------- */
+
+function openAutopilot() {
+  $('autopilot-modal').classList.add('active');
+  $('ap-real').style.display = 'none';
+  $('ap-dry').style.display = '';
+  $('autopilot-report').innerHTML = '';
+}
+
+function closeAutopilot() {
+  $('autopilot-modal').classList.remove('active');
+}
+
+async function runAutopilot(dryRun) {
+  const reportEl = $('autopilot-report');
+  const btn = dryRun ? $('ap-dry') : $('ap-real');
+  btn.disabled = true;
+  btn.textContent = 'Running…';
+  reportEl.innerHTML = '<p class="sub" style="margin:0">Searching, scoring and preparing — this can take a minute or two.</p>';
+  try {
+    const resp = await fetch('/api/autonomous/run', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dry_run: dryRun }),
+    });
+    const r = await resp.json();
+    if (!resp.ok) {
+      reportEl.innerHTML = `<p class="sub" style="color:var(--red);margin:0">${esc(r.error || 'Run failed')}</p>`;
+      return;
+    }
+    renderAutopilotReport(reportEl, r, dryRun);
+    if (dryRun) $('ap-real').style.display = '';
+    else $('ap-dry').style.display = 'none';
+  } catch (err) {
+    reportEl.innerHTML = `<p class="sub" style="color:var(--red);margin:0">Network error: ${esc(err.message)}</p>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = dryRun ? 'Dry run again' : 'Run for real';
+  }
+}
+
+function renderAutopilotReport(el, r, dryRun) {
+  const apps = r.applications_prepared || [];
+  const skipped = r.skipped || [];
+  let html = `<div class="report-kv"><span class="k">Queries used</span><span>${esc((r.queries_used || []).slice(0, 4).join(', '))}</span></div>`;
+  html += `<div class="report-kv"><span class="k">Jobs discovered</span><span>${r.jobs_found ?? 0}</span></div>`;
+  html += `<div class="report-kv"><span class="k">${dryRun ? 'Would prepare' : 'Prepared'}</span><span>${apps.length}</span></div>`;
+  html += `<div class="report-kv"><span class="k">Skipped</span><span>${skipped.length}</span></div>`;
+  if (apps.length) {
+    html += '<ul class="report-list">' + apps.map(a =>
+      `<li><b>${esc(a.title || a.job_title || '')}</b> — ${esc(a.company || a.job_company || '')}` +
+      `${a.score != null ? ` · ${a.score}%` : ''}${a.explanation ? ` · ${esc(a.explanation)}` : ''}</li>`
+    ).join('') + '</ul>';
+  }
+  el.innerHTML = html;
+}
+
+/* ---------------- greeting & boot ---------------- */
+
+const SUGGESTIONS = [
+  'Find me entry-level software developer jobs',
+  'What needs my attention?',
+  'Show my applications',
+  'Apply to the best 3 matching jobs',
+];
+
+function showGreeting() {
+  const bubble = addAgentShell();
+  agentText(bubble, `Hi${profileName() ? ' ' + profileName() : ''}! I'm your job-search agent. Tell me what kind of work you're looking for — any career, not just tech — and I'll find roles you can actually do, prepare the applications, and ask when I'm unsure.`);
+  const chips = document.createElement('div');
+  chips.className = 'chips';
+  chips.innerHTML = SUGGESTIONS.map(s => `<button data-q="${esc(s)}">${esc(s)}</button>`).join('');
+  chips.querySelectorAll('button').forEach(btn =>
+    btn.addEventListener('click', () => quickSend(btn.dataset.q))
+  );
+  bubble.appendChild(chips);
+  scrollBottom();
+}
+
+function quickSend(q) {
+  if (busy) return;
+  inputEl.value = '';
+  sendChat(q);
+}
+
+let _name = '';
+function profileName() { return _name; }
+
+async function boot() {
+  try {
+    const resp = await fetch('/api/profile');
+    const data = await resp.json();
+    if (data.profile) {
+      _name = (data.profile.name || '').split(' ')[0];
+      const chip = $('cv-chip');
+      chip.classList.add('ok');
+      chip.textContent = '✓ CV loaded';
+    } else {
+      $('cv-chip').textContent = '⬆ Upload CV';
+    }
+  } catch {}
+  showGreeting();
+}
+
+/* ---------------- composer behaviour ---------------- */
+
+function autosize() {
+  inputEl.style.height = 'auto';
+  inputEl.style.height = Math.min(inputEl.scrollHeight, 160) + 'px';
+}
+
+inputEl.addEventListener('input', autosize);
+inputEl.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    sendCurrent();
+  }
+});
+
+$('cv-file').addEventListener('change', () => uploadCV($('cv-file')));
+
+async function uploadCV(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const chip = $('cv-chip');
+  chip.textContent = 'Uploading…';
+  const formData = new FormData();
+  formData.append('cv', file);
+  try {
+    const resp = await fetch('/api/upload-cv', { method: 'POST', body: formData });
+    const data = await resp.json();
+    if (!resp.ok) {
+      chip.textContent = 'Upload failed — retry';
+      return;
+    }
+    chip.classList.add('ok');
+    chip.textContent = '✓ CV loaded';
+    const bubble = addAgentShell();
+    agentText(bubble, `CV loaded for ${data.profile.name || 'you'}. Ask me to find jobs whenever you're ready — I'll adapt my search strategy to your profession.`);
+    scrollBottom();
+  } catch {
+    chip.textContent = 'Upload failed — retry';
+  }
+}
+
+window.addEventListener('DOMContentLoaded', boot);
 </script>
 </body>
 </html>

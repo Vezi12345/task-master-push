@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from typing import Optional
 
 import requests
@@ -17,19 +18,35 @@ class LLMInvalidOutput(ValueError):
     pass
 
 
+_AVAIL_TTL_SECONDS = 60.0
+_avail_cache: dict = {"ok": None, "at": 0.0}
+
+
 def _host() -> str:
     return os.environ.get("OLLAMA_HOST", OLLAMA_HOST)
 
 
 def is_available(timeout: float = 2.0) -> bool:
+    """Probe Ollama at most once per TTL window.
+
+    Every rank/summary/parse call used to re-probe the port; with Ollama down
+    (firewalled SYN drops) each probe burned the full timeout, so a single
+    search paid 2s x dozens of calls. The verdict is now memoised briefly.
+    """
     if LLM_OFFLINE:
         return False
+    now = time.monotonic()
+    cached = _avail_cache["ok"]
+    if cached is not None and (now - _avail_cache["at"]) < _AVAIL_TTL_SECONDS:
+        return cached
     try:
         resp = requests.get(f"{_host()}/api/tags", timeout=timeout)
-        resp.raise_for_status()
-        return True
+        ok = resp.ok
     except Exception:
-        return False
+        ok = False
+    _avail_cache["ok"] = ok
+    _avail_cache["at"] = now
+    return ok
 
 
 def chat_json(
