@@ -1,7 +1,10 @@
 from pathlib import Path
 
+import pytest
+import requests
+
 from agent.search import dedupe_jobs
-from sources.base import JobSource
+from sources.base import JobSource, JobSourceError
 from sources.dpsa_circular import DpsaCircularSource, parse_circular
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -181,3 +184,67 @@ def test_source_works_through_jobsource_abstraction(monkeypatch):
 
 def test_search_without_url_returns_empty():
     assert DpsaCircularSource({"name": "dpsa_circular"}).search(None) == []
+
+
+class _FakeResponse:
+    def __init__(self, content: bytes, ok: bool = True, status: int = 200):
+        self.content = content
+        self.status_code = status
+        self._ok = ok
+
+    def raise_for_status(self):
+        if not self._ok:
+            raise requests.HTTPError(
+                f"{self.status_code} Client Error: Not Found for url: {CIRCULAR_URL}"
+            )
+
+
+class _FakePdf:
+    def __init__(self, *args, **kwargs):
+        self.pages = [_FakePage()]
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+
+class _FakePage:
+    def extract_text(self):
+        return REALISTIC
+
+
+def test_fetch_timeout_raises_job_source_error(monkeypatch):
+    def _timeout(*args, **kwargs):
+        raise requests.Timeout("Connection timed out")
+
+    monkeypatch.setattr("requests.get", _timeout)
+    source = DpsaCircularSource({"name": "dpsa_circular", "url": CIRCULAR_URL})
+    with pytest.raises(JobSourceError, match="could not download circular"):
+        source.fetch_text(CIRCULAR_URL)
+
+
+def test_fetch_http_error_raises_job_source_error(monkeypatch):
+    monkeypatch.setattr(
+        "requests.get", lambda *a, **k: _FakeResponse(b"", ok=False, status=404)
+    )
+    source = DpsaCircularSource({"name": "dpsa_circular", "url": CIRCULAR_URL})
+    with pytest.raises(JobSourceError, match="could not download circular"):
+        source.fetch_text(CIRCULAR_URL)
+
+
+def test_fetch_malformed_pdf_raises_job_source_error(monkeypatch):
+    monkeypatch.setattr(
+        "requests.get", lambda *a, **k: _FakeResponse(b"definitely not a pdf")
+    )
+    source = DpsaCircularSource({"name": "dpsa_circular", "url": CIRCULAR_URL})
+    with pytest.raises(JobSourceError, match="could not parse circular PDF"):
+        source.fetch_text(CIRCULAR_URL)
+
+
+def test_fetch_success_returns_extracted_text(monkeypatch):
+    monkeypatch.setattr("requests.get", lambda *a, **k: _FakeResponse(b"<pdf bytes>"))
+    monkeypatch.setattr("pdfplumber.open", _FakePdf)
+    source = DpsaCircularSource({"name": "dpsa_circular", "url": CIRCULAR_URL})
+    assert source.fetch_text(CIRCULAR_URL) == REALISTIC

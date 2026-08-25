@@ -15,6 +15,8 @@ HEADERS = {
     )
 }
 
+HTTP_TIMEOUT = 20
+
 POST_RE = re.compile(r"^POST\s+(?P<ref>\d{1,3}(?:/\d{1,3})+)(?![\d/])\s*(?::\s*)?(?P<title>[^:\s].*)$")
 
 _LABEL_RE = re.compile(r"^([A-Z][A-Za-z0-9 ]*?)\s*:\s*(.*)$")
@@ -95,7 +97,7 @@ class DpsaCircularSource(JobSource):
 
     def fetch_text(self, url: str) -> str:
         try:
-            resp = requests.get(url, headers=HEADERS, timeout=30)
+            resp = requests.get(url, headers=HEADERS, timeout=HTTP_TIMEOUT)
             resp.raise_for_status()
         except requests.RequestException as exc:
             raise JobSourceError(f"could not download circular: {exc}") from exc

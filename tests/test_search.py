@@ -24,6 +24,25 @@ def test_search_uses_enabled_sources_only(monkeypatch):
     assert len(jobs) == len(DEMO_JOBS)
 
 
+def test_failing_source_does_not_abort_search(monkeypatch):
+    from sources.base import JobSourceError
+    from sources.dpsa_circular import DpsaCircularSource
+
+    def _boom(self, query):
+        raise JobSourceError("could not download circular: boom")
+
+    monkeypatch.setattr(DpsaCircularSource, "search", _boom)
+    region = config.load_region("za")
+    query = parse_intent("entry-level software engineering jobs", region)
+    jobs, messages = search_jobs(query, region)
+    assert len(jobs) == len(DEMO_JOBS)
+    assert all(job.source == "demo" for job in jobs)
+    assert any(
+        "dpsa_circular" in m and "could not download circular" in m for m in messages
+    )
+    assert any("schemaorg" in m and "skipped (not enabled)" in m for m in messages)
+
+
 def test_dedupe_removes_duplicates():
     jobs = DemoSource().search(None) * 2
     unique = dedupe_jobs(jobs)
