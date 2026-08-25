@@ -206,20 +206,32 @@ def _salary_score(job: Job, query: JobQuery, reasons: list[str]) -> int:
     return 0
 
 
+def _matching_terms(query: JobQuery) -> list[str]:
+    seen: set[str] = set()
+    terms: list[str] = []
+    for term in list(query.skills) + list(query.keywords):
+        key = term.strip().lower()
+        if key and key not in seen:
+            seen.add(key)
+            terms.append(key)
+    return terms
+
+
 def _skills_score(job: Job, query: JobQuery, reasons: list[str]) -> int:
-    if not query.skills:
+    terms = _matching_terms(query)
+    if not terms:
         reasons.append("Skills:    • (not specified)")
         return W_SKILLS
     text = f"{job.title} {job.description}".lower()
-    matched = [s for s in query.skills if s.lower() in text]
-    missing = [s for s in query.skills if s.lower() not in text]
+    matched = [t for t in terms if t in text]
+    missing = [t for t in terms if t not in text]
     if matched and not missing:
         reasons.append(f"Skills:    ✓ {', '.join(matched)}")
         return W_SKILLS
     if matched:
         reasons.append(f"Skills:    ✓ {', '.join(matched)}   (~ missing {', '.join(missing)})")
         return round(W_SKILLS * 0.7)
-    reasons.append(f"Skills:    ✗ none of {', '.join(query.skills)}")
+    reasons.append(f"Skills:    ✗ none of {', '.join(terms)}")
     return 0
 
 
@@ -249,8 +261,9 @@ def _remote_score(job: Job, query: JobQuery, reasons: list[str]) -> int:
 
 def _summary(job: Job, query: JobQuery, llm=None) -> str:
     text = f"{job.title} {job.description}".lower()
-    matched_skills = [s for s in query.skills if s.lower() in text]
-    missing_skills = [s for s in query.skills if s.lower() not in text]
+    terms = _matching_terms(query)
+    matched_skills = [t for t in terms if t in text]
+    missing_skills = [t for t in terms if t not in text]
     bits = []
     if matched_skills:
         bits.append(f"asks for {', '.join(matched_skills)}")

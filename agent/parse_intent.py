@@ -84,6 +84,38 @@ SENIORITY_ENTRY = [
 SENIORITY_MID = ["mid-level", "mid level", "experienced", "2+ years", "3+ years"]
 SENIORITY_SENIOR = ["senior", "principal", "lead", "head of", "5+ years", "10+ years"]
 
+KEYWORD_STOPWORDS = {
+    "find", "looking", "for", "the", "a", "an", "of", "to", "in", "on", "at",
+    "and", "or", "with", "me", "my", "i", "am", "job", "jobs", "position",
+    "positions", "role", "roles", "best", "matches", "show", "please", "can",
+    "you", "help", "want", "need", "list", "search", "about", "any", "some",
+    "also", "then", "really", "great", "good", "like", "would", "from", "up",
+    "around", "new", "based", "across", "all", "within", "our", "their",
+    "preferably", "preferred", "preference", "prefer", "preferable", "remote",
+    "onsite", "on-site", "site", "office", "hybrid", "fully", "must", "only",
+    "100", "paid", "paying", "pays", "pay", "salary", "salaries", "minimum",
+    "least", "monthly", "month", "per", "annum", "annual", "week", "weeks",
+    "year", "years", "experience", "recently", "recent", "engineering",
+}
+
+
+def _consumed_words(region: dict) -> set[str]:
+    words: set[str] = set(KEYWORD_STOPWORDS)
+    for _, phrases in ROLE_PHRASES:
+        for phrase in phrases:
+            words.update(phrase.split())
+    for markers in (SENIORITY_ENTRY, SENIORITY_MID, SENIORITY_SENIOR):
+        for marker in markers:
+            words.update(marker.split())
+    words.update(str(region.get("name", "")).lower().split())
+    for entry in region.get("locations", {}).values():
+        words.add(str(entry.get("city", "")).lower())
+        words.update(str(alias).lower() for alias in entry.get("aliases", []))
+    for keywords in region.get("skills_dictionary", {}).values():
+        for keyword in keywords:
+            words.update(str(keyword).lower().split())
+    return words
+
 
 def parse_intent(prompt: str, region: dict, llm=None) -> JobQuery:
     query = _parse_with_llm(prompt, region, llm)
@@ -131,7 +163,7 @@ def _parse_with_rules(prompt: str, region: dict) -> JobQuery:
     query = JobQuery(
         roles=_extract_roles(lowered),
         seniority=_extract_seniority(lowered),
-        keywords=_extract_keywords(lowered),
+        keywords=_extract_keywords(lowered, region),
         locations=_extract_locations(lowered, region),
         remote=_extract_remote(lowered),
         min_salary=_extract_salary(lowered),
@@ -158,9 +190,22 @@ def _extract_seniority(text: str) -> str:
     return ""
 
 
-def _extract_keywords(text: str) -> list[str]:
-    words = ["computer science", "bcom", "degree", "matric", "graduat"]
-    return [word for word in words if word in text]
+def _extract_keywords(text: str, region: dict) -> list[str]:
+    residue = text.lower()
+    for word in _consumed_words(region):
+        residue = re.sub(rf"\b{re.escape(word)}\b", " ", residue)
+    tokens = re.findall(r"[a-z][a-z-]+", residue)
+    keywords: list[str] = []
+    seen: set[str] = set()
+    for token in tokens:
+        token = token.strip("-")
+        if len(token) < 3 or token in seen:
+            continue
+        seen.add(token)
+        keywords.append(token)
+        if len(keywords) >= 10:
+            break
+    return keywords
 
 
 def _extract_locations(text: str, region: dict) -> list[LocationRef]:

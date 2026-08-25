@@ -1,6 +1,7 @@
 import config
 from agent.parse_intent import JobQuery, parse_intent
 from agent.rank import rank_jobs
+from sources.base import Job
 from sources.demo import DEMO_JOBS, DemoSource
 
 
@@ -72,3 +73,24 @@ def test_scores_are_explainable_and_summarised():
     top = ranked[0]
     assert top.reasons
     assert all(r.startswith(("Role", "Seniority", "Location", "Salary", "Skills", "Remote")) for r in top.reasons)
+
+
+def test_domain_keyword_boosts_matching_job():
+    query = _query("aerospace software engineering jobs")
+    assert "aerospace" in query.keywords
+    generic = Job(
+        title="Software Engineer",
+        company="GenericCorp",
+        location="Cape Town",
+        description="Build backend services with Python and SQL.",
+    )
+    aerospace = Job(
+        title="Software Engineer",
+        company="AeroCorp",
+        location="Cape Town",
+        description="Build software systems for the aerospace industry using Python.",
+    )
+    ranked = rank_jobs([generic, aerospace], query)
+    assert len(ranked) == 2
+    assert ranked[0].job is aerospace
+    assert ranked[0].score > ranked[1].score

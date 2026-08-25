@@ -49,6 +49,15 @@ def test_remote_required_and_onsite():
     assert parse_intent("developer jobs", region).remote == "any"
 
 
+def test_remote_semantics_matrix():
+    region = config.load_region("za")
+    assert parse_intent("fully remote software engineer", region).remote == "required"
+    assert parse_intent("remote preferred software engineer", region).remote == "preferred"
+    assert parse_intent("software engineer, preferably remote", region).remote == "preferred"
+    assert parse_intent("remote software engineer jobs", region).remote == "preferred"
+    assert parse_intent("on-site software engineer", region).remote == "no"
+
+
 def test_city_alias():
     region = config.load_region("za")
     query = parse_intent("jobs near Sandton", region)
