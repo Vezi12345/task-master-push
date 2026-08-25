@@ -1,0 +1,65 @@
+{
+  "name": "South Africa",
+  "country_code": "za",
+  "currency": "ZAR",
+  "currency_symbol": "R",
+  "work_rights_default": "SA citizen / permanent resident",
+  "seniority_markers": {
+    "entry": ["junior", "entry-level", "entry level", "graduate", "intern", "learner", "trainee", "recent"],
+    "mid": ["mid-level", "mid level", "experienced"],
+    "senior": ["senior", "principal", "lead", "head of"]
+  },
+  "locations": {
+    "durban": {
+      "city": "Durban",
+      "province": "KwaZulu-Natal",
+      "aliases": ["durbs", "umhlanga", "westville", "kwazulu-natal", "kzn"],
+      "lat": -29.8587,
+      "lon": 31.0218
+    },
+    "johannesburg": {
+      "city": "Johannesburg",
+      "province": "Gauteng",
+      "aliases": ["joburg", "jhb", "jozi", "sandton", "gauteng"],
+      "lat": -26.2041,
+      "lon": 28.0473
+    },
+    "cape town": {
+      "city": "Cape Town",
+      "province": "Western Cape",
+      "aliases": ["capetown", "cpt", "western cape", "stellenbosch", "paarl"],
+      "lat": -33.9249,
+      "lon": 18.4241
+    },
+    "pretoria": {
+      "city": "Pretoria",
+      "province": "Gauteng",
+      "aliases": ["tshwane", "centurion"],
+      "lat": -25.7479,
+      "lon": 28.2293
+    },
+    "east london": {
+      "city": "East London",
+      "province": "Eastern Cape",
+      "aliases": ["eastern cape", "gqeberha", "port elizabeth"],
+      "lat": -33.0153,
+      "lon": 27.9116
+    }
+  },
+  "skills_dictionary": {
+    "python": ["python"],
+    "sql": ["sql", "postgres", "mysql", "database"],
+    "java": ["java"],
+    "javascript": ["javascript", "js", "typescript", "node", "react", "vue", "angular"],
+    "csharp": ["c#", ".net", "dotnet", "csharp"],
+    "excel": ["excel"],
+    "cloud": ["aws", "azure", "gcp", "cloud"],
+    "data science": ["machine learning", "ml", "data science", "statistics"],
+    "finance": ["finance", "financial", "accounting", "bcom", "banking"]
+  },
+  "sources": [
+    {"name": "demo", "enabled": true},
+    {"name": "dpsa_circular", "enabled": false, "url": "", "default_company": "DPSA / Government", "note": "Set 'url' to this week's DPSA circular PDF link, then set enabled=true."},
+    {"name": "schemaorg", "enabled": false, "search_url": "", "note": "Set 'search_url' to a board search page (e.g. a za.indeed.com search URL), then set enabled=true."}
+  ]
+}
