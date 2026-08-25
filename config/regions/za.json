@@ -68,6 +68,13 @@
   },
   "sources": [
     {"name": "dpsa_circular", "enabled": true, "url": "https://www.dpsa.gov.za/dpsa2g/documents/vacancies/2026/PSV%20CIRCULAR%2027%20of%202026.pdf", "default_company": "DPSA / Government"},
+    {"name": "greenhouse", "enabled": true, "require_south_africa": true, "companies": [
+      {"token": "moniepoint", "name": "Moniepoint"},
+      {"token": "luno", "name": "Luno"},
+      {"token": "entersekt", "name": "Entersekt"},
+      {"token": "offerzen", "name": "OfferZen"},
+      {"token": "taxvalet", "name": "TaxValet"}
+    ]},
     {"name": "schemaorg", "enabled": false, "search_url": "", "note": "Set 'search_url' to a board search page (e.g. a za.indeed.com search URL), then set enabled=true."}
   ]
 }

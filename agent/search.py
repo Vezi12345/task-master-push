@@ -4,6 +4,7 @@ from collections import Counter
 
 from sources.base import Job, JobSource, JobSourceError
 from sources.dpsa_circular import DpsaCircularSource
+from sources.greenhouse import GreenhouseSource
 from sources.schemaorg import SchemaOrgSource
 from sources.validation import (
     filter_real_jobs,
@@ -16,12 +17,21 @@ from .relevance import filter_relevant_jobs
 SOURCE_REGISTRY: dict[str, type[JobSource]] = {
     "dpsa_circular": DpsaCircularSource,
     "schemaorg": SchemaOrgSource,
+    "greenhouse": GreenhouseSource,
 }
 
 
-def search_jobs(query: JobQuery, region: dict) -> tuple[list[Job], list[str]]:
+def search_jobs(query: JobQuery, region: dict, stats: dict | None = None) -> tuple[list[Job], list[str]]:
+    """Search every enabled source and return surviving jobs plus messages.
+
+    When ``stats`` is a dict it is filled with per-source funnel counts:
+    ``{source_name: {"discovered": n, "kept": m}}`` where *discovered* is
+    what the source returned and *kept* is how many of those records
+    survived validation, relevance filtering and deduplication.
+    """
     messages: list[str] = []
     jobs: list[Job] = []
+    discovered: Counter[str] = Counter()
     for source_config in region.get("sources", []):
         if not source_config.get("enabled"):
             messages.append(f"{source_config.get('name', '?')}: skipped (not enabled)")
@@ -34,6 +44,7 @@ def search_jobs(query: JobQuery, region: dict) -> tuple[list[Job], list[str]]:
             source = source_class(source_config)
             found = source.search(query)
             jobs.extend(found)
+            discovered[source.name] += len(found)
             messages.append(f"{source.name}: {len(found)} jobs")
         except JobSourceError as exc:
             messages.append(f"{source_config['name']}: {exc}")
@@ -54,7 +65,16 @@ def search_jobs(query: JobQuery, region: dict) -> tuple[list[Job], list[str]]:
         lambda reason: reason,
     ))
 
-    return dedupe_jobs(jobs), messages
+    final_jobs = dedupe_jobs(jobs)
+    if stats is not None:
+        kept = Counter(job.source for job in final_jobs)
+        stats.update(
+            {
+                name: {"discovered": count, "kept": kept.get(name, 0)}
+                for name, count in discovered.items()
+            }
+        )
+    return final_jobs, messages
 
 
 def _summarise_rejections(label: str, reasons: list[str], key_of=None) -> list[str]:

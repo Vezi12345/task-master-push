@@ -67,6 +67,7 @@ class PipelineResult:
     jobs_found: list[Job] = field(default_factory=list)
     ranked: list[RankedJob] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+    source_stats: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -83,6 +84,7 @@ class AgentResult:
     missing_information: list[MissingInfo] = field(default_factory=list)
     application_summaries: list[dict] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+    source_stats: dict = field(default_factory=dict)
     error: Optional[str] = None
 
 
@@ -176,7 +178,8 @@ class JobApplicationAgent:
         self._msg(self._format_query_understood(query))
 
         self.state = AgentState.SEARCHING
-        jobs, search_messages = search_jobs(query, self.region)
+        stats: dict = {}
+        jobs, search_messages = search_jobs(query, self.region, stats)
         self._msg(f"Found {len(jobs)} jobs.")
         for msg in search_messages:
             self._msg(msg, "search_detail")
@@ -232,7 +235,8 @@ class JobApplicationAgent:
 
         self.last_query = query
         self.state = AgentState.SEARCHING
-        jobs, search_messages = search_jobs(query, self.region)
+        stats: dict = {}
+        jobs, search_messages = search_jobs(query, self.region, stats)
         self._msg(f"Found {len(jobs)} jobs.")
 
         self.state = AgentState.RANKING
@@ -248,6 +252,7 @@ class JobApplicationAgent:
                 jobs_found=jobs,
                 ranked=ranked,
                 notes=self._build_notes(),
+                source_stats=stats,
             )
 
         self.state = AgentState.MATCHING
@@ -287,6 +292,7 @@ class JobApplicationAgent:
             applications=applications,
             missing_information=missing,
             notes=self._build_notes(),
+            source_stats=stats_apply,
         )
 
     def _handle_show_applications(self) -> AgentResult:
@@ -666,12 +672,13 @@ class JobApplicationAgent:
 
 def run_pipeline(prompt: str, region: dict, llm=None) -> PipelineResult:
     query = _parse(prompt, region, llm)
-    jobs, messages = search_jobs(query, region)
+    stats: dict = {}
+    jobs, messages = search_jobs(query, region, stats)
     ranked = rank_jobs(jobs, query, llm)
     notes: list[str] = []
     if llm is not None and not llm.is_available():
         notes.append("Ollama is offline - used built-in rules for intent parsing.")
-    return PipelineResult(query=query, search_messages=messages, jobs_found=jobs, ranked=ranked, notes=notes)
+    return PipelineResult(query=query, search_messages=messages, jobs_found=jobs, ranked=ranked, notes=notes, source_stats=stats)
 
 
 def _parse(prompt: str, region: dict, llm=None) -> JobQuery:

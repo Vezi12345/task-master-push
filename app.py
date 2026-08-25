@@ -118,6 +118,7 @@ def api_search():
         "related": summarize_related(result.jobs_found) if not ranked else [],
         "ranked": ranked,
         "messages": result.search_messages,
+        "sources": result.source_stats,
         "notes": result.notes,
         "has_cv": load_profile() is not None,
     })
