@@ -352,6 +352,12 @@ class CandidateProfile(BaseModel):
                 self.set_known("highest_qualification", qual, "cv")
             if edu.field:
                 self.set_known("discipline", edu.field, "cv")
+            elif edu.qualification:
+                # Try extracting discipline from qualification string
+                from application.answer_engine import _extract_discipline_from_qualification
+                extracted = _extract_discipline_from_qualification(edu.qualification)
+                if extracted:
+                    self.set_known("discipline", extracted, "cv")
             if edu.result and edu.result not in qual:
                 self.set_known("education_result", edu.result, "cv")
         if self.skills:

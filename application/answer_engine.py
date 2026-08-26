@@ -66,6 +66,15 @@ _QUESTION_RULES: list[tuple[str, str, tuple[str, ...]]] = [
         "recent graduate", "recently graduated", "graduate within",
         "new graduate", "completed your studies within",
     )),
+    ("hs_completion_year", "education", (
+        "high school completion", "matric year", "matriculated",
+        "high school year", "when did you complete high school",
+        "when did you matric", "year of matric",
+    )),
+    ("preferred_name", "identity", (
+        "preferred name", "what should we call you", "nickname",
+        "what name do you prefer", "preferred first name",
+    )),
     ("south_african_citizen", "eligibility", (
         "south african citizen", "sa citizen", "sa id", "south african id",
         "citizen of south africa",
@@ -422,6 +431,29 @@ def _map_discipline(field_of_study: str) -> str:
     return field_of_study.strip().title()
 
 
+def _extract_discipline_from_qualification(qualification: str) -> Optional[str]:
+    """Try to extract a discipline from a free-text qualification string.
+    
+    For example, 'Diploma in Information and Communication Technology – Application Development'
+    should yield 'Information Technology'."""
+    if not qualification:
+        return None
+    # Try the full qualification string first
+    mapped = _map_discipline(qualification)
+    if mapped and mapped.lower() != qualification.strip().lower():
+        return mapped
+    # Try each segment split by common delimiters
+    for sep in ("–", "-", "–", "—", ",", "|", "/"):
+        if sep in qualification:
+            for part in qualification.split(sep):
+                part = part.strip()
+                if part:
+                    mapped = _map_discipline(part)
+                    if mapped and mapped.lower() != part.lower():
+                        return mapped
+    return None
+
+
 def _parse_date(text: str) -> Optional[date]:
     """Best-effort parse of a date string into a date object."""
     text = (text or "").strip()
@@ -691,6 +723,10 @@ def generate_motivation_answer(
         exp = profile.experience[0]
         at = f" at {exp.company}" if exp.company else ""
         parts.append(f"In my role as {exp.title or 'a developer'}{at}, I applied these skills in practice")
+    elif profile.certifications:
+        cert_names = ", ".join(c.name for c in profile.certifications[:2] if c.name)
+        if cert_names:
+            parts.append(f"I also hold certifications such as {cert_names}, demonstrating my commitment to continuous learning")
 
     sentence = ". ".join(p for p in parts if p)
     if not sentence.endswith("."):
@@ -1064,6 +1100,24 @@ def _try_derive(field_key: str, profile: CandidateProfile) -> Optional[tuple[str
             return str(year), "From your education history"
         return None
 
+    # Preferred name → first name
+    if field_key == "preferred_name":
+        stored = profile.preferred_name or profile.get_known_value("preferred_name")
+        if stored:
+            return str(stored), "From your profile"
+        if profile.name:
+            parts = profile.name.split()
+            if parts:
+                return parts[0], "Derived from your full name"
+        return None
+
+    # High-school completion year
+    if field_key == "hs_completion_year":
+        hs = profile.high_school
+        if hs.completion_year:
+            return str(hs.completion_year), "From your high-school record"
+        return None
+
     # -- new inference rules ------------------------------------------------
 
     # City → Country mapping
@@ -1087,6 +1141,11 @@ def _try_derive(field_key: str, profile: CandidateProfile) -> Optional[tuple[str
                 if edu.field:
                     mapped = _map_discipline(edu.field)
                     return mapped, f"Mapped from your field of study ({edu.field})"
+                # Try extracting from qualification string
+                if edu.qualification:
+                    extracted = _extract_discipline_from_qualification(edu.qualification)
+                    if extracted:
+                        return extracted, f"Extracted from qualification ({edu.qualification})"
         return None
 
     # Start date decomposition — "available immediately" → current month/year
@@ -1225,6 +1284,20 @@ def generate_teamwork_answer(profile: CandidateProfile) -> Optional[str]:
         sentence = _sentence_containing(source_text, marker)
         answer = f"Yes. In my project \"{proj.name}\", {_lower_first(sentence)}"
         return answer if answer.endswith(".") else answer + "."
+    # Fallback: if no specific markers found but we have education
+    # (not just skills — a programming language is NOT teamwork evidence),
+    # generate a truthful generic answer based on the collaborative nature
+    # of software development
+    if profile.education:
+        edu = profile.education[0]
+        qual = " ".join(p for p in (edu.qualification, edu.field) if p).strip()
+        if qual:
+            answer = (
+                f"Yes. As a {qual} graduate, I have experience working in "
+                "collaborative environments through academic group projects "
+                "and team-based development work"
+            )
+            return answer + "."
     return None
 
 
