@@ -524,12 +524,18 @@ class JobApplicationAgent:
                 compute_all_scores(app)
                 self.tracker.update(app)
                 applications.append(app)
-        finally:
+        except Exception:
+            # If anything goes wrong, close the browser
             if driver is not None:
                 try:
                     driver.close()
                 except Exception:
                     pass
+            raise
+
+        # Store the driver so it can be reused during approve/submit.
+        # The browser stays open for the user to review the filled form.
+        self._active_driver = driver
 
         return applications
 
@@ -645,8 +651,12 @@ class JobApplicationAgent:
                 from application.lifecycle import transition
                 transition(app, S.READY_FOR_REVIEW, "Legacy approval routed to centralized service")
 
-            from application.browser import open_driver
-            driver = open_driver()
+            # Reuse the browser driver from preparation if still open,
+            # otherwise open a new one.
+            driver = getattr(self, '_active_driver', None)
+            if driver is None:
+                from application.browser import open_driver
+                driver = open_driver()
             try:
                 # Legacy applications from _prepare_applications() lack
                 # form_analysis and fill_plan.  Use reprepare() to navigate
