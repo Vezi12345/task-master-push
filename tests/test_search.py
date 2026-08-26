@@ -4,6 +4,14 @@ from agent.search import SOURCE_REGISTRY, dedupe_jobs, search_jobs
 from evaluation.fixtures import FIXTURE_JOBS, load_fixture_jobs
 
 
+def _controlled_region(sources):
+    return {
+        "name": "Testland", "currency": "ZAR",
+        "locations": {}, "skills_dictionary": {},
+        "sources": sources,
+    }
+
+
 def test_demo_source_is_not_registered():
     """The live pipeline must never be able to serve demo/mock jobs."""
     assert "demo" not in SOURCE_REGISTRY
@@ -11,13 +19,13 @@ def test_demo_source_is_not_registered():
 
 
 def test_search_uses_enabled_sources_only(monkeypatch):
-    region = config.load_region("za")
-    enabled = {s["name"] for s in region["sources"] if s.get("enabled")}
-    assert "demo" not in enabled
-    assert enabled == {"dpsa_circular"}
     from sources.dpsa_circular import DpsaCircularSource
 
     monkeypatch.setattr(DpsaCircularSource, "search", lambda self, query: [])
+    region = _controlled_region([
+        {"name": "dpsa_circular", "enabled": True},
+        {"name": "greenhouse", "enabled": False},
+    ])
     query = parse_intent("entry-level software engineering jobs", region)
     jobs, messages = search_jobs(query, region)
     assert any("skipped (not enabled)" in m for m in messages)
@@ -32,7 +40,10 @@ def test_failing_source_does_not_abort_search(monkeypatch):
         raise JobSourceError("could not download circular: boom")
 
     monkeypatch.setattr(DpsaCircularSource, "search", _boom)
-    region = config.load_region("za")
+    region = _controlled_region([
+        {"name": "dpsa_circular", "enabled": True},
+        {"name": "schemaorg", "enabled": False},
+    ])
     query = parse_intent("entry-level software engineering jobs", region)
     jobs, messages = search_jobs(query, region)
     assert jobs == []

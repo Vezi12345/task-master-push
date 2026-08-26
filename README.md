@@ -192,7 +192,7 @@ Set `search_url` to a job-board search page that embeds schema.org JobPosting JS
 python -m pytest
 ```
 
-All 237 tests are offline — no network, no model required. Tests cover:
+All 714 tests are offline — no network, no model required. Tests cover:
 - Candidate profile, CV parsing, matching
 - Intent parsing, job ranking, search
 - DPSA circular parsing, schema.org parsing
@@ -200,6 +200,23 @@ All 237 tests are offline — no network, no model required. Tests cover:
 - Application tracking, scoring, form filling
 - Agent state transitions, CLI output
 - Evaluation quality metrics
+
+## Ranking quality
+
+Measured against a 15,898-job South African public-sector corpus (DPSA vacancy
+circulars) with 196 evaluation queries:
+
+| Metric | Value |
+|--------|-------|
+| NDCG@10 | **0.470** |
+| Naive keyword baseline NDCG@10 | 0.439 |
+| Ranker advantage over baseline | +0.031 |
+| Precision@3 | 0.366 |
+| MRR | 0.550 |
+| Intent-field accuracy | 0.894 |
+
+Evaluation corpus: 196 queries, 15,898 jobs, 154 gold-labelled queries.
+Full details in `evaluation/reports/national_analysis.md`.
 
 ## Design principles
 

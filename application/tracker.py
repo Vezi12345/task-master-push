@@ -74,6 +74,12 @@ class ApplicationTracker:
         return None
 
     def is_duplicate(self, job_id: str) -> bool:
+        """Return True if an application for ``job_id`` already exists and
+        is in a state that should NOT be overwritten by a new preparation
+        or submission attempt.
+
+        Covers: submitted, in-review, in-progress, waiting-for-user,
+        blocked, and post-submission tracking states."""
         existing = self.find_by_job_id(job_id)
         if existing is None:
             return False
@@ -81,9 +87,18 @@ class ApplicationTracker:
             return True
         if existing.status in (
             ApplicationStatus.SUBMITTED,
+            ApplicationStatus.AWAITING_CONFIRMATION,
+            ApplicationStatus.CONFIRMED,
             ApplicationStatus.PENDING,
             ApplicationStatus.INTERVIEW,
             ApplicationStatus.OFFER,
+            # in-progress states that must not be restarted
+            ApplicationStatus.READY_FOR_REVIEW,
+            ApplicationStatus.SUBMITTING,
+            ApplicationStatus.USER_VERIFIED,
+            ApplicationStatus.REQUIRES_USER_ACTION,
+            ApplicationStatus.BLOCKED,
+            ApplicationStatus.MANUAL_ACTION_REQUIRED,
         ):
             return True
         return False

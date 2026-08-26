@@ -265,10 +265,14 @@ class FillPlan(BaseModel):
 
     @property
     def unanswered_required(self) -> list[str]:
-        return [
-            e.question for e in self.entries
-            if e.required and (e.needs_user or not e.value)
-        ]
+        seen: set[str] = set()
+        result: list[str] = []
+        for e in self.entries:
+            if e.required and (e.needs_user or not e.value):
+                if e.question not in seen:
+                    seen.add(e.question)
+                    result.append(e.question)
+        return result
 
     @property
     def ready_to_fill(self) -> bool:
@@ -449,5 +453,18 @@ class FormFiller:
                 entry.value = None
             else:
                 entry.value = matched
+
+        # 5. number inputs must receive a numeric value
+        if (
+            entry.field_type == "number"
+            and entry.value is not None
+            and not entry.needs_user
+            and not _re.fullmatch(r"\d+(\.\d+)?", entry.value.strip())
+        ):
+            entry.needs_user = True
+            entry.reason = (
+                f"Non-numeric value for number field: {entry.value!r}"
+            )
+            entry.value = None
 
         return entry
