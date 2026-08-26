@@ -74,10 +74,34 @@ _QUESTION_RULES: list[tuple[str, str, tuple[str, ...]]] = [
         "citizenship", "nationality", "citizen of", "which country",
         "legal right to work in", "permitted to work in",
     )),
+    ("nationality", "eligibility", (
+        "nationality", "what is your nationality",
+    )),
     ("work_authorisation", "eligibility", (
         "authorised to work", "authorized to work", "right to work",
         "legally entitled to work", "eligible to work", "work permit",
         "work visa", "work authorisation", "work authorization",
+    )),
+    ("id_number", "eligibility", (
+        "id number", "id nr", "national id", "passport number",
+        "identity number", "sa id number", "south african id",
+    )),
+    ("gender_pronouns", "demographic", (
+        "pronouns", "preferred pronouns", "gender pronouns",
+    )),
+    ("discipline", "education", (
+        "discipline", "field of study", "field of discipline",
+        "area of study", "specialisation", "specialization",
+        "study field", "academic discipline",
+    )),
+    ("country_of_residence", "identity", (
+        "country of residence", "country you live in", "which country do you live",
+        "country do you reside", "residential country", "current country",
+        "^country$",
+    )),
+    ("heard_of_company", "other", (
+        "heard of", "familiar with", "know about", "know of",
+        "prior to applying", "aware of",
     )),
     ("drivers_licence", "requirements", (
         "driver's licence", "drivers licence", "driver's license",
@@ -244,6 +268,14 @@ def classify_question(question: str) -> tuple[str, str]:
     for field_key, category, patterns in _QUESTION_RULES:
         for pattern in patterns:
             if pattern in text:
+                # "Start date month" / "Start date year" are date-picker
+                # sub-fields, not availability text.  They need numeric
+                # values or select-dropdown picks, not "AVAILABLE IMMEDIATELY".
+                if (
+                    field_key == "availability"
+                    and re.search(r"year|month|day", text)
+                ):
+                    return "", "other"
                 return field_key, category
     if "?" in question or _looks_like_question(question):
         return "", "other"
@@ -261,6 +293,152 @@ def _looks_like_question(text: str) -> bool:
         "will ", "have ", "has ", "what ", "when ", "where ", "who ", "why ",
         "how ", "which ", "please ", "tell ",
     ))
+
+
+# ---------------------------------------------------------------------------
+# city → country, discipline mapping, date parsing helpers
+# ---------------------------------------------------------------------------
+
+_CITY_COUNTRY: dict[str, str] = {
+    "durban": "South Africa",
+    "johannesburg": "South Africa",
+    "cape town": "South Africa",
+    "pretoria": "South Africa",
+    "centurion": "South Africa",
+    "sandton": "South Africa",
+    "port elizabeth": "South Africa",
+    "bloemfontein": "South Africa",
+    "stellenbosch": "South Africa",
+    "midrand": "South Africa",
+    "rosebank": "South Africa",
+    "fourways": "South Africa",
+    "randburg": "South Africa",
+    "century city": "South Africa",
+    "london": "United Kingdom",
+    "manchester": "United Kingdom",
+    "birmingham": "United Kingdom",
+    "edinburgh": "United Kingdom",
+    "glasgow": "United Kingdom",
+    "new york": "United States",
+    "san francisco": "United States",
+    "los angeles": "United States",
+    "chicago": "United States",
+    "seattle": "United States",
+    "austin": "United States",
+    "boston": "United States",
+    "washington": "United States",
+    "toronto": "Canada",
+    "vancouver": "Canada",
+    "montreal": "Canada",
+    "ottawa": "Canada",
+    "sydney": "Australia",
+    "melbourne": "Australia",
+    "brisbane": "Australia",
+    "perth": "Australia",
+    "auckland": "New Zealand",
+    "wellington": "New Zealand",
+    "berlin": "Germany",
+    "munich": "Germany",
+    "amsterdam": "Netherlands",
+    "dublin": "Ireland",
+    "paris": "France",
+    "singapore": "Singapore",
+    "dubai": "United Arab Emirates",
+    "abu dhabi": "United Arab Emirates",
+    "nairobi": "Kenya",
+    "lagos": "Nigeria",
+    "accra": "Ghana",
+}
+
+
+def _city_to_country(location: str) -> Optional[str]:
+    """Infer country from a city or 'City, Country' string."""
+    loc = (location or "").strip().lower()
+    if not loc:
+        return None
+    # "Durban, South Africa" → split and try last part first
+    parts = [p.strip() for p in re.split(r"[,;]", loc) if p.strip()]
+    if len(parts) >= 2:
+        country = _CITY_COUNTRY.get(parts[-1])
+        if country:
+            return country
+    # Try the full location
+    country = _CITY_COUNTRY.get(loc)
+    if country:
+        return country
+    # Try each part
+    for part in parts:
+        country = _CITY_COUNTRY.get(part)
+        if country:
+            return country
+    return None
+
+
+_DISCIPLINE_MAP: dict[str, str] = {
+    "application development": "Information Technology",
+    "application development": "Information Technology",
+    "software development": "Computer Science",
+    "computer science": "Computer Science",
+    "information technology": "Information Technology",
+    "information technology": "Information Technology",
+    "computer engineering": "Computer Engineering",
+    "electrical engineering": "Electrical Engineering",
+    "mechanical engineering": "Mechanical Engineering",
+    "data science": "Data Science",
+    "data analytics": "Data Science",
+    "mathematics": "Mathematics",
+    "physics": "Physics",
+    "chemistry": "Chemistry",
+    "business administration": "Business Administration",
+    "business management": "Business Administration",
+    "finance": "Finance",
+    "accounting": "Accounting",
+    "marketing": "Marketing",
+    "communications": "Communications",
+    "design": "Design",
+    "graphic design": "Design",
+    "web design": "Design",
+    "networking": "Information Technology",
+    "cybersecurity": "Information Technology",
+    "information systems": "Information Technology",
+    "software engineering": "Software Engineering",
+    "systems engineering": "Systems Engineering",
+}
+
+
+def _map_discipline(field_of_study: str) -> str:
+    """Map a free-text education field to a standard discipline value."""
+    lowered = (field_of_study or "").strip().lower()
+    if not lowered:
+        return ""
+    # Exact match
+    if lowered in _DISCIPLINE_MAP:
+        return _DISCIPLINE_MAP[lowered]
+    # Partial match
+    for key, value in _DISCIPLINE_MAP.items():
+        if key in lowered or lowered in key:
+            return value
+    # Capitalize and return as-is
+    return field_of_study.strip().title()
+
+
+def _parse_date(text: str) -> Optional[date]:
+    """Best-effort parse of a date string into a date object."""
+    text = (text or "").strip()
+    if not text:
+        return None
+    # Try common formats
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y", "%Y-%m", "%B %Y",
+                "%b %Y", "%Y", "%d %B %Y", "%d %b %Y"):
+        try:
+            return date.strptime(text, fmt)
+        except ValueError:
+            continue
+    # Year only
+    m = re.match(r"^(19|20)\d{2}$", text)
+    if m:
+        return date(int(text), 6, 1)  # mid-year default
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -878,14 +1056,102 @@ def _try_derive(field_key: str, profile: CandidateProfile) -> Optional[tuple[str
         auth = (profile.work_authorisation or "").strip()
         if auth:
             return auth, "From your saved work-authorisation status"
-        # A non-SA citizenship does NOT prove anything either way (the
-        # candidate may hold a visa or permanent residency) — ask.
         return None
 
     if field_key == "graduation_year":
         year = latest_graduation_year(profile)
         if year is not None:
             return str(year), "From your education history"
+        return None
+
+    # -- new inference rules ------------------------------------------------
+
+    # City → Country mapping
+    if field_key in ("country_of_residence", "country"):
+        stored = profile.country_of_residence or profile.get_known_value("country_of_residence")
+        if stored:
+            return str(stored), "From your profile"
+        location = (profile.location or "").strip()
+        country = _city_to_country(location)
+        if country:
+            return country, f"Inferred from your location ({location})"
+        return None
+
+    # Education field → Discipline
+    if field_key == "discipline":
+        stored = profile.get_known_value("discipline")
+        if stored:
+            return str(stored), "From your education history"
+        if profile.education:
+            for edu in profile.education:
+                if edu.field:
+                    mapped = _map_discipline(edu.field)
+                    return mapped, f"Mapped from your field of study ({edu.field})"
+        return None
+
+    # Start date decomposition — "available immediately" → current month/year
+    if field_key == "start_date_month":
+        availability = (profile.availability or "").lower()
+        if "immediate" in availability or "asap" in availability or "available now" in availability:
+            month = date.today().strftime("%B")
+            return month, "Current month (available immediately)"
+        return None
+
+    if field_key == "start_date_year":
+        availability = (profile.availability or "").lower()
+        if "immediate" in availability or "asap" in availability or "available now" in availability:
+            return str(date.today().year), "Current year (available immediately)"
+        return None
+
+    # End date decomposition — pull from most recent education
+    if field_key in ("end_date_month", "end_date_year"):
+        if profile.education:
+            edu = profile.education[0]
+            end = (edu.end_date or "").strip()
+            if end:
+                parsed = _parse_date(end)
+                if parsed:
+                    if field_key == "end_date_month":
+                        return parsed.strftime("%B"), f"From your education record ({edu.institution})"
+                    return str(parsed.year), f"From your education record ({edu.institution})"
+        return None
+
+    # Start date from education — when question asks for start date of studies
+    if field_key in ("start_date_month_of_study", "start_date_year_of_study"):
+        if profile.education:
+            edu = profile.education[0]
+            start = (edu.start_date or "").strip()
+            if start:
+                parsed = _parse_date(start)
+                if parsed:
+                    if field_key == "start_date_month_of_study":
+                        return parsed.strftime("%B"), f"From your education record ({edu.institution})"
+                    return str(parsed.year), f"From your education record ({edu.institution})"
+        return None
+
+    # "Heard of company" — safe default is "No"
+    if field_key == "heard_of_company":
+        return "No", "Default answer — cannot verify company familiarity"
+
+    # Nationality — alias for citizenship
+    if field_key == "nationality":
+        stored = profile.nationality or profile.citizenship
+        if stored:
+            return stored, "From your profile"
+        return None
+
+    # ID number — only from explicit storage, never inferred
+    if field_key == "id_number":
+        stored = profile.id_number or profile.get_known_value("id_number")
+        if stored:
+            return str(stored), "From your profile"
+        return None
+
+    # Gender pronouns — only from explicit storage
+    if field_key == "gender_pronouns":
+        stored = profile.gender_pronouns or profile.get_known_value("gender_pronouns")
+        if stored:
+            return str(stored), "From your profile"
         return None
 
     return None

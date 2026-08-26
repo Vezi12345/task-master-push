@@ -73,10 +73,12 @@ _NEEDS_ATTENTION_PATTERNS = [
 ]
 
 _APPROVE_PATTERNS = [
+    re.compile(r"^approve$", re.IGNORECASE),
     re.compile(r"approve\s+(?:application\s+)?(\w+)", re.IGNORECASE),
     re.compile(r"approve\s+(?:all|the|these|those)\s*(?:applications?)?", re.IGNORECASE),
     re.compile(r"submit\s+(?:application\s+)?(\w+)", re.IGNORECASE),
     re.compile(r"submit\s+(?:all|the|these|those)\s*(?:applications?)?", re.IGNORECASE),
+    re.compile(r"^yes$", re.IGNORECASE),
     re.compile(r"yes\s*,?\s*submit", re.IGNORECASE),
 ]
 
@@ -268,15 +270,33 @@ KEYWORD_STOPWORDS = {
 }
 
 
-def _consumed_words(region: dict) -> set[str]:
-    words: set[str] = set(KEYWORD_STOPWORDS)
+def _matched_role_words(text: str) -> set[str]:
+    """Words belonging to role phrases that actually matched *text*.
+
+    Only consumed when the phrase is a substring of the text, so unmatched
+    phrases don't silently eat keywords like "officer" or "enrolled".
+    """
+    words: set[str] = set()
     for _, phrases in ROLE_PHRASES:
         for phrase in phrases:
-            words.update(phrase.split())
-    # registry role vocabulary describes the search target too
+            if phrase in text:
+                words.update(phrase.split())
     for _, phrases in _REGISTRY_ROLE_PHRASES:
         for phrase in phrases:
-            words.update(phrase.split())
+            if phrase in text:
+                words.update(phrase.split())
+    return words
+
+
+def _consumed_words(region: dict, text: str = "") -> set[str]:
+    words: set[str] = set(KEYWORD_STOPWORDS)
+    # Role-phrase words are NOT consumed globally — only when the phrase
+    # actually matched the query text.  This lets unmatched words like
+    # "officer", "manager", "deputy" survive as keywords instead of
+    # silently vanishing, which was the root cause of empty keyword lists
+    # for queries like "HR officer" or "senior manager".
+    if text:
+        words.update(_matched_role_words(text))
     for markers in (SENIORITY_ENTRY, SENIORITY_MID, SENIORITY_SENIOR):
         for marker in markers:
             words.update(marker.split())
@@ -406,7 +426,7 @@ def _is_filler(token: str) -> bool:
 
 def _extract_keywords(text: str, region: dict) -> list[str]:
     residue = text.lower()
-    for word in _consumed_words(region):
+    for word in _consumed_words(region, text=residue):
         residue = re.sub(rf"\b{re.escape(word)}\b", " ", residue)
     tokens = re.findall(r"[a-z][a-z-]+", residue)
     keywords: list[str] = []

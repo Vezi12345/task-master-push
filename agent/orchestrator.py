@@ -11,7 +11,6 @@ from application.question_engine import AnswerStore, QuestionEngine
 from application.documents import ApplicationDocuments
 from application.tracker import ApplicationTracker
 from application.scoring import compute_all_scores, rank_applications
-from application.form_filler import get_platform
 from candidate.matching import (
     ApplicationReadiness,
     CandidateMatch,
@@ -268,18 +267,12 @@ class JobApplicationAgent:
         )
 
         self.state = AgentState.PREPARING_APPLICATION
-        applications, missing = self._prepare_applications(selected)
+        applications = self._prepare_applications_unified(selected)
         self.pending_applications = applications
 
-        if missing:
-            self.state = AgentState.NEEDS_INFORMATION
-            self._msg(self._format_missing_info(missing))
-        else:
-            self.state = AgentState.AWAITING_APPROVAL
-
+        self.state = AgentState.AWAITING_APPROVAL
         self._msg(self._format_approval_request(applications))
 
-        self.state = AgentState.AWAITING_APPROVAL
         return AgentResult(
             state=self.state,
             messages=list(self.messages),
@@ -290,9 +283,8 @@ class JobApplicationAgent:
             ranked=ranked,
             matched_jobs=matched,
             applications=applications,
-            missing_information=missing,
             notes=self._build_notes(),
-            source_stats=stats_apply,
+            source_stats=stats,
         )
 
     def _handle_show_applications(self) -> AgentResult:
@@ -328,7 +320,10 @@ class JobApplicationAgent:
     def _handle_approve(self, target_id: Optional[str] = None) -> AgentResult:
         if target_id:
             app = self.tracker.find_by_partial_id(target_id)
-            if app and app.status == ApplicationStatus.AWAITING_APPROVAL:
+            if app and app.status in (
+                ApplicationStatus.AWAITING_APPROVAL,
+                ApplicationStatus.READY_FOR_REVIEW,
+            ):
                 to_submit = [app]
             else:
                 self._msg(f"No submittable application found matching '{target_id}'.")
@@ -341,8 +336,22 @@ class JobApplicationAgent:
         else:
             to_submit = [
                 a for a in self.pending_applications
-                if a.status == ApplicationStatus.AWAITING_APPROVAL
+                if a.status in (
+                    ApplicationStatus.AWAITING_APPROVAL,
+                    ApplicationStatus.READY_FOR_REVIEW,
+                )
             ]
+            # In stateless mode (API creates a fresh agent per request),
+            # pending_applications is always empty.  Fall back to the
+            # tracker which persists across requests.
+            if not to_submit:
+                to_submit = [
+                    a for a in self.tracker.all()
+                    if a.status in (
+                        ApplicationStatus.AWAITING_APPROVAL,
+                        ApplicationStatus.READY_FOR_REVIEW,
+                    )
+                ]
         if not to_submit:
             self._msg("No applications pending approval.")
             self.state = AgentState.COMPLETED
@@ -440,21 +449,107 @@ class JobApplicationAgent:
 
         return selected
 
+    def _prepare_applications_unified(
+        self,
+        selected: list[dict],
+    ) -> list[Application]:
+        """Prepare applications using the modern pipeline.
+
+        Each selected job is handed to ``ApplicationAutomationService.start_application()``,
+        which navigates to the real application page, analyses the form,
+        builds a fill plan with CSS selectors, fills known fields, and
+        stops at ``READY_FOR_REVIEW``.  Match/readiness scores and
+        document metadata are merged in afterwards.
+
+        One shared browser driver is reused across all jobs to avoid
+        repeated open/close overhead.  Jobs that fail (unreachable page,
+        CAPTCHA, etc.) are skipped gracefully — one bad site must not kill
+        the whole batch.
+        """
+        from application.submission import ApplicationAutomationService
+
+        applications: list[Application] = []
+        service = ApplicationAutomationService()
+
+        driver = None
+        try:
+            from application.browser import open_driver
+            driver = open_driver(prefer_headless=False)
+
+            for item in selected:
+                job = item["job"]
+
+                if self.tracker.is_duplicate(job.id):
+                    continue
+
+                try:
+                    app = service.start_application(
+                        job, self.profile, self.tracker, driver=driver,
+                    )
+                except Exception as exc:
+                    self._msg(
+                        f"Skipped {job.title} at {job.company}: {exc}"
+                    )
+                    continue
+
+                if app.status in (
+                    ApplicationStatus.FAILED,
+                    ApplicationStatus.BLOCKED,
+                    ApplicationStatus.REQUIRES_USER_ACTION,
+                ):
+                    # start_application could not reach or analyse the page.
+                    # The application is already recorded in the tracker with
+                    # the appropriate error — include it in the result so the
+                    # user sees what happened.
+                    applications.append(app)
+                    continue
+
+                # Merge match/readiness scores into the application.
+                rank = item["rank"]
+                match = item["candidate_match"]
+                readiness = item["readiness"]
+                detailed = item.get("detailed_match")
+
+                app.job_preference_score = rank.score
+                app.candidate_match_score = match.score
+                app.readiness_score = readiness.score
+                app.warnings = list(readiness.warnings)
+
+                if readiness.blockers:
+                    app.errors.extend(readiness.blockers)
+
+                if detailed and detailed.concerns:
+                    app.notes.extend(detailed.concerns)
+
+                compute_all_scores(app)
+                self.tracker.update(app)
+                applications.append(app)
+        finally:
+            if driver is not None:
+                try:
+                    driver.close()
+                except Exception:
+                    pass
+
+        return applications
+
     def _prepare_applications(
         self,
         selected: list[dict],
     ) -> tuple[list[Application], list[MissingInfo]]:
+        """DEPRECATED: legacy preparation without browser form analysis.
+
+        Kept for backward compatibility with the standalone
+        ``prepare_application()`` function and existing tests.  New code
+        should use ``_prepare_applications_unified()`` instead.
+        """
         applications: list[Application] = []
         all_missing: list[MissingInfo] = []
 
         for item in selected:
             job = item["job"]
 
-            existing = self.tracker.find_by_job_id(job.id)
-            if existing and existing.status not in (
-                ApplicationStatus.DRAFT,
-                ApplicationStatus.WITHDRAWN,
-            ):
+            if self.tracker.is_duplicate(job.id):
                 continue
 
             rank = item["rank"]
@@ -521,37 +616,88 @@ class JobApplicationAgent:
         return applications, all_missing
 
     def _submit_application(self, app: Application) -> bool:
-        platform = get_platform(app.job_url)
+        from application.submission import ApplicationAutomationService
+
+        # Route through the centralized submission service for safety checks:
+        # status validation, consent gates, confirmation detection, and
+        # mocked-test tagging.  Never call platform.fill_and_submit() directly.
+        service = ApplicationAutomationService()
         try:
-            result = platform.fill_and_submit(
-                app.job_url,
-                fields=app.answers,
-                files={},
-            )
-            if result.success:
-                app.update_status(ApplicationStatus.SUBMITTED)
-                app.submitted = True
-                app.submission_url = result.application_url or app.job_url
-                app.submission_time = app.updated_at
-                app.date_submitted = app.updated_at
-                app.submission_platform = platform.name
-                app.confirmation_id = result.confirmation_id
+            from application.models import ApplicationStatus as S
+
+            # Ensure status is compatible with the submission gate.
+            if app.status not in (S.READY_FOR_REVIEW, S.AWAITING_APPROVAL):
+                app.update_status(S.FAILED)
+                app.errors.append(
+                    f"Cannot submit: application is {app.status.value}, "
+                    "expected ready_for_review or awaiting_approval"
+                )
                 self.tracker.update(app)
+                self._msg(
+                    f"Application failed: {app.job_title} at {app.job_company} "
+                    f"- wrong status ({app.status.value})"
+                )
+                return False
+
+            # Transition legacy AWAITING_APPROVAL → READY_FOR_REVIEW so the
+            # centralized service's gate accepts the application.
+            if app.status == S.AWAITING_APPROVAL:
+                from application.lifecycle import transition
+                transition(app, S.READY_FOR_REVIEW, "Legacy approval routed to centralized service")
+
+            from application.browser import open_driver
+            driver = open_driver()
+            try:
+                # Legacy applications from _prepare_applications() lack
+                # form_analysis and fill_plan.  Use reprepare() to navigate
+                # to the real page, analyse the form, build a proper fill
+                # plan with CSS selectors, and update app.form_analysis so
+                # confirm_and_submit() can locate the submit button.
+                plan = None
+                if not app.form_analysis and app.application_url:
+                    from candidate.storage import load_profile
+                    profile = self.profile or load_profile()
+                    if profile is not None:
+                        plan = service.reprepare(app, profile, driver)
+
+                if plan is None and app.fill_plan:
+                    from application.form_filler import FillPlan, PlannedAnswer
+                    plan = FillPlan(entries=[
+                        PlannedAnswer(**e) for e in app.fill_plan
+                    ])
+
+                if plan is None:
+                    # Last resort: reconstruct from answers (no selectors)
+                    from application.form_filler import FillPlan, PlannedAnswer
+                    plan_entries = []
+                    for q, v in (app.answers or {}).items():
+                        plan_entries.append(PlannedAnswer(
+                            question=q, value=v, answer_type="verified",
+                            source="user", needs_user=False,
+                        ))
+                    plan = FillPlan(entries=plan_entries)
+
+                result = service.confirm_and_submit(
+                    app, self.tracker, driver,
+                    consent_granted=True,
+                    user_answers={},
+                    plan=plan,
+                )
+            finally:
+                try:
+                    driver.close()
+                except Exception:
+                    pass
+
+            if result.submitted:
                 self._msg(
                     f"Application submitted: {app.job_title} at {app.job_company}"
                 )
                 return True
             else:
-                if result.requires_human_input:
-                    app.update_status(ApplicationStatus.MANUAL_ACTION_REQUIRED)
-                    app.notes.append("Requires manual submission — browser automation could not complete")
-                else:
-                    app.update_status(ApplicationStatus.FAILED)
-                app.errors.append(result.error)
-                self.tracker.update(app)
                 self._msg(
                     f"Application failed: {app.job_title} at {app.job_company} "
-                    f"- {result.error}"
+                    f"- {result.error or 'submission not confirmed'}"
                 )
                 return False
         except Exception as exc:
@@ -660,7 +806,7 @@ class JobApplicationAgent:
                 for w in app.warnings:
                     parts.append(f"     Warning: {w}")
             parts.append("")
-        parts.append("Reply 'approve' to submit, or 'cancel' to abort.")
+        parts.append("Reply 'approve' or 'yes' to submit, or 'cancel' to abort.")
         return "\n".join(parts)
 
     def _build_notes(self) -> list[str]:
@@ -699,11 +845,8 @@ def prepare_application(
         raise ValueError("No candidate profile found. Upload a CV first.")
 
     tracker = ApplicationTracker()
-    existing = tracker.find_by_job_id(job.id)
-    if existing and existing.status not in (
-        ApplicationStatus.DRAFT,
-        ApplicationStatus.WITHDRAWN,
-    ):
+    if tracker.is_duplicate(job.id):
+        existing = tracker.find_by_job_id(job.id)
         return existing
 
     question_engine = QuestionEngine(AnswerStore())

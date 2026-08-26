@@ -188,7 +188,11 @@ def test_empty_relevant_result_is_allowed(monkeypatch):
     ]
     monkeypatch.setattr(DpsaCircularSource, "search", lambda self, query: only_scientists)
 
-    region = config.load_region("za")
+    region = {
+        "name": "Testland", "currency": "ZAR",
+        "locations": {}, "skills_dictionary": {},
+        "sources": [{"name": "dpsa_circular", "enabled": True}],
+    }
     query = _query("entry level software developer jobs")
     jobs, messages = search_jobs(query, region)
     assert jobs == []

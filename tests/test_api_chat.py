@@ -52,7 +52,7 @@ def client(monkeypatch, tmp_path):
 def _fake_search(monkeypatch, jobs):
     query = JobQuery(roles=["developer"], seniority="junior")
 
-    def fake_search(query_in, region):
+    def fake_search(query_in, region, stats=None):
         return jobs, ["Found %d jobs." % len(jobs)]
 
     def fake_rank(jobs_in, query_in, llm=None):

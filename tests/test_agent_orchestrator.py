@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from unittest.mock import MagicMock
+
 import pytest
 
 from agent.parse_intent import (
@@ -20,7 +22,7 @@ from agent.orchestrator import (
     JobApplicationAgent,
     PipelineResult,
 )
-from application.models import ApplicationStatus
+from application.models import Application, ApplicationStatus
 from application.question_engine import QuestionEngine
 from application.answer_engine import AnswerType
 from candidate.profile import CandidateProfile, Education, Experience, KnownField, KnowledgeStatus
@@ -135,7 +137,9 @@ def test_show_applications_regex():
 
 def test_approve_regex():
     assert _APPROVE_PATTERNS[1].search("approve all applications") is not None
-    assert _APPROVE_PATTERNS[4].search("yes, submit") is not None
+    assert _APPROVE_PATTERNS[6].search("yes, submit") is not None
+    assert _APPROVE_PATTERNS[0].search("approve") is not None
+    assert _APPROVE_PATTERNS[5].search("yes") is not None
 
 
 def test_cancel_regex():
@@ -219,6 +223,7 @@ def test_agent_apply(monkeypatch, tmp_path):
     from sources.dpsa_circular import DpsaCircularSource
     from candidate import storage
     from application import tracker as tracker_module
+    from application.submission import ApplicationAutomationService
 
     monkeypatch.setattr(
         DpsaCircularSource, "search",
@@ -228,6 +233,36 @@ def test_agent_apply(monkeypatch, tmp_path):
     monkeypatch.setattr(storage, "DATA_DIR", tmp_path)
     monkeypatch.setattr(tracker_module, "TRACKER_FILE", tmp_path / "applications.json")
     monkeypatch.setattr(config, "ANSWERS_FILE", tmp_path / "answers.json")
+
+    # Mock ApplicationAutomationService to return a READY_FOR_REVIEW app
+    mock_service_instance = MagicMock()
+    job = make_valid_job()
+    mock_app = Application(
+        id="mock-app-1",
+        job_id=job.id,
+        job_title=job.title,
+        job_company=job.company,
+        job_location=job.location,
+        job_url=job.url,
+        job_description=job.description,
+        job_salary_text=job.salary_text or "",
+        job_remote=job.remote,
+        status=ApplicationStatus.READY_FOR_REVIEW,
+        application_url="https://example.com/apply",
+        application_platform="greenhouse",
+    )
+    mock_service_instance.start_application.return_value = mock_app
+
+    def mock_init(self):
+        self._mock = mock_service_instance
+
+    monkeypatch.setattr(
+        ApplicationAutomationService, "__init__", mock_init,
+    )
+    monkeypatch.setattr(
+        ApplicationAutomationService, "start_application",
+        lambda self, job, profile, tracker, driver=None: mock_service_instance.start_application(job, profile, tracker, driver),
+    )
 
     profile = CandidateProfile(
         name="Test User",
@@ -244,7 +279,61 @@ def test_agent_apply(monkeypatch, tmp_path):
     assert result.applications[0].status in (
         ApplicationStatus.AWAITING_APPROVAL,
         ApplicationStatus.NEEDS_INFORMATION,
+        ApplicationStatus.READY_FOR_REVIEW,
     )
+
+
+def test_agent_apply_returns_source_stats(monkeypatch, tmp_path):
+    """Regression: _handle_apply referenced undefined ``stats_apply`` instead
+    of ``stats``, causing a NameError when the apply path succeeded.
+
+    Proves the fix by asserting source_stats is a dict (not a NameError)."""
+    from sources.dpsa_circular import DpsaCircularSource
+    from candidate import storage
+    from application import tracker as tracker_module
+    from application.submission import ApplicationAutomationService
+
+    monkeypatch.setattr(
+        DpsaCircularSource, "search",
+        lambda self, query: [make_valid_job()],
+    )
+    monkeypatch.setattr(storage, "PROFILE_FILE", tmp_path / "profile.json")
+    monkeypatch.setattr(storage, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(tracker_module, "TRACKER_FILE", tmp_path / "applications.json")
+    monkeypatch.setattr(config, "ANSWERS_FILE", tmp_path / "answers.json")
+
+    mock_service_instance = MagicMock()
+    mock_app = Application(
+        id="test-1",
+        job_id="j1",
+        job_title="Developer",
+        job_company="TestCo",
+        status=ApplicationStatus.READY_FOR_REVIEW,
+        application_url="https://example.com/apply",
+        application_platform="greenhouse",
+    )
+    mock_service_instance.start_application.return_value = mock_app
+    monkeypatch.setattr(
+        ApplicationAutomationService, "__init__", lambda self: None,
+    )
+    monkeypatch.setattr(
+        ApplicationAutomationService, "start_application",
+        lambda self, job, profile, tracker, driver=None: mock_service_instance.start_application(job, profile, tracker, driver),
+    )
+
+    profile = CandidateProfile(
+        name="Test User",
+        email="test@test.com",
+        skills=["Python"],
+    )
+    storage.save_profile(profile)
+
+    region = _region()
+    agent = JobApplicationAgent(region)
+    result = agent.process_input("apply to the best 1 software developer jobs")
+    assert result.state == AgentState.AWAITING_APPROVAL
+    assert isinstance(result.source_stats, dict)
+    assert "dpsa_circular" in result.source_stats
 
 
 def test_agent_apply_no_cv(monkeypatch, tmp_path):
@@ -457,7 +546,7 @@ def test_turn_isolation_across_searches(monkeypatch):
         return []
 
     monkeypatch.setattr(DpsaCircularSource, "search", fake_search)
-    monkeypatch.setattr("agent.orchestrator.search_jobs", lambda q, r: ([], ["msg-a"]))
+    monkeypatch.setattr("agent.orchestrator.search_jobs", lambda q, r, s=None: ([], ["msg-a"]))
 
     region = _region()
     agent = JobApplicationAgent(region)

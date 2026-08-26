@@ -358,6 +358,16 @@ class _FormParser(HTMLParser):
             required=required,
         )
         field_obj.category = classify_question_label(f"{label} {name}")
+
+        # Refine: "start date month"/"start date year" are date-picker
+        # sub-fields, not availability text fields.  The "availability"
+        # category produces free-text answers like "AVAILABLE IMMEDIATELY"
+        # which are wrong for month selects and year number inputs.
+        if field_obj.category == "availability" and re.search(
+            r"year|month|day", f"{label} {name}", re.I
+        ):
+            field_obj.category = "other"
+
         field_obj.is_consent = field_obj.category == "consent" or (
             ftype == "checkbox"
             and bool(re.search(r"consent|agree|permission", question, re.I))

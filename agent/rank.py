@@ -189,8 +189,17 @@ def _rank_job(job: Job, query: JobQuery, llm=None) -> RankedJob:
     title = job.title.lower()
     if (LEADERSHIP_TITLE_RE.search(title)
             and not DEVELOPMENTAL_TITLE_RE.search(title)):
-        points -= 12
-        reasons.append("Seniority: ~ leadership title (ranked lower)")
+        # Softer penalty: leadership roles are penalised less when the user
+        # explicitly asked for senior/director roles (query.seniority or
+        # keywords contain leadership terms).
+        _user_wants_leadership = (
+            query.seniority == "senior"
+            or any(kw in ("director", "head", "chief", "executive", "manager")
+                   for kw in query.keywords)
+        )
+        penalty = 4 if _user_wants_leadership else 8
+        points -= penalty
+        reasons.append(f"Seniority: ~ leadership title (penalty -{penalty})")
 
     score = round(points / TOTAL_WEIGHT * 100)
     score = max(0, min(100, score))
@@ -199,16 +208,25 @@ def _rank_job(job: Job, query: JobQuery, llm=None) -> RankedJob:
 
 def _role_score(job: Job, query: JobQuery, reasons: list[str]) -> int:
     if not query.roles:
-        reasons.append("Role:      • (not specified)")
-        return W_ROLE
+        # When no roles are specified, use free-text keywords as a weak
+        # role signal — but only title matches count, since description
+        # matches are too broad (e.g. "manager" in any job description).
+        title = job.title.lower()
+        kw_in_title = [kw for kw in query.keywords
+                       if len(kw) >= 3 and kw in title]
+        if kw_in_title:
+            reasons.append(f"Role:      ~ keyword '{kw_in_title[0]}' in title (no role specified)")
+            return round(W_ROLE * 0.7)
+        reasons.append("Role:      \u2022 (not specified)")
+        return round(W_ROLE * 0.4)
     matched, in_title = _role_match(job, query)
     if in_title:
-        reasons.append(f"Role:      ✓ '{matched}' in title")
+        reasons.append(f"Role:      \u2713 '{matched}' in title")
         return W_ROLE
     if matched:
         reasons.append(f"Role:      ~ '{matched}' in description only")
         return round(W_ROLE * 0.7)
-    reasons.append("Role:      ✗ no matching role")
+    reasons.append("Role:      \u2717 no matching role")
     return 0
 
 

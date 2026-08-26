@@ -147,15 +147,16 @@ IDENTITY_KEYS = (
     "name", "email", "phone", "location", "date_of_birth",
     "preferred_name", "country_of_residence", "city", "address",
 )
-EDUCATION_KEYS = ("highest_qualification", "education_result")
-ELIGIBILITY_KEYS = ("citizenship", "south_african_citizen", "work_authorisation")
+EDUCATION_KEYS = ("highest_qualification", "education_result", "discipline")
+ELIGIBILITY_KEYS = ("citizenship", "nationality", "south_african_citizen",
+                    "work_authorisation", "id_number")
 PREFERENCE_KEYS = (
     "expected_salary", "minimum_salary", "relocation", "work_preference",
     "preferred_locations", "travel_preference", "international_travel",
 )
 LOGISTICS_KEYS = ("notice_period", "availability")
 REQUIREMENT_KEYS = ("drivers_licence", "vehicle")
-DEMOGRAPHIC_KEYS = ("race", "gender", "disability")
+DEMOGRAPHIC_KEYS = ("race", "gender", "disability", "gender_pronouns")
 
 SENSITIVE_KEYS = frozenset(DEMOGRAPHIC_KEYS) | {
     "citizenship", "south_african_citizen", "date_of_birth",
@@ -192,17 +193,12 @@ class CandidateProfile(BaseModel):
     # -- documents -------------------------------------------------------------
     documents: list[DocumentRef] = Field(default_factory=list)
 
-    # -- skills / history ----------------------------------------------------
-    skills: list[str] = Field(default_factory=list)
-    education: list[Education] = Field(default_factory=list)
-    experience: list[Experience] = Field(default_factory=list)
-    certifications: list[Certification] = Field(default_factory=list)
-    projects: list[Project] = Field(default_factory=list)
-    achievements: list[str] = Field(default_factory=list)
-
     # -- eligibility ---------------------------------------------------------
     citizenship: str = ""
+    nationality: str = ""               # alias some forms use
     work_authorisation: str = ""
+    id_number: str = ""                 # national ID / passport number
+    gender_pronouns: str = ""           # he/him, she/her, they/them
 
     # -- preferences ---------------------------------------------------------
     expected_salary: str = ""
@@ -336,12 +332,26 @@ class CandidateProfile(BaseModel):
             self.set_known("location", self.location, "cv")
         if self.country_of_residence:
             self.set_known("country_of_residence", self.country_of_residence, "cv")
+        if self.nationality:
+            self.set_known("nationality", self.nationality, "cv")
+        if self.id_number:
+            self.set_known("id_number", self.id_number, "cv")
+        if self.gender_pronouns:
+            self.set_known("gender_pronouns", self.gender_pronouns, "cv")
+        if self.expected_salary:
+            self.set_known("expected_salary", self.expected_salary, "cv")
+        if self.notice_period:
+            self.set_known("notice_period", self.notice_period, "cv")
+        if self.drivers_licence:
+            self.set_known("drivers_licence", self.drivers_licence, "cv")
         edu = next((e for e in self.education if e.is_highest), None) \
             or (self.education[0] if self.education else None)
         if edu:
             qual = " ".join(p for p in (edu.qualification, edu.field) if p)
             if qual:
                 self.set_known("highest_qualification", qual, "cv")
+            if edu.field:
+                self.set_known("discipline", edu.field, "cv")
             if edu.result and edu.result not in qual:
                 self.set_known("education_result", edu.result, "cv")
         if self.skills:

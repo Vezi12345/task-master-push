@@ -626,8 +626,14 @@ def api_application_detail(app_id):
 
 @app.route("/api/applications/<app_id>/approve", methods=["POST"])
 def api_approve_application(app_id):
+    """Legacy approve endpoint — routes through the centralized submission
+    service for safety checks (consent gates, confirmation detection,
+    mocked-test tagging).  Prefer POST /api/applications/<id>/confirm for
+    new integrations."""
     from application.tracker import ApplicationTracker
-    from application.form_filler import get_platform
+    from application.submission import ApplicationAutomationError
+    from application.browser import BrowserError, BrowserUnavailable
+    from application.models import ApplicationStatus as S
 
     tracker = ApplicationTracker()
     app_obj = tracker.get(app_id)
@@ -636,37 +642,70 @@ def api_approve_application(app_id):
     if not app_obj:
         return jsonify({"error": "Application not found"}), 404
 
-    if app_obj.status != ApplicationStatus.AWAITING_APPROVAL:
-        return jsonify({"error": f"Application is {app_obj.status.value}, not awaiting approval"}), 400
+    if app_obj.status not in (S.AWAITING_APPROVAL, S.READY_FOR_REVIEW):
+        return jsonify({
+            "error": f"Application is {app_obj.status.value}, not awaiting approval or ready for review"
+        }), 400
 
-    platform = get_platform(app_obj.job_url)
+    # Transition legacy AWAITING_APPROVAL → READY_FOR_REVIEW so the
+    # centralized service's gate accepts the application.
+    if app_obj.status == S.AWAITING_APPROVAL:
+        from application.lifecycle import transition
+        transition(app_obj, S.READY_FOR_REVIEW, "Legacy approve endpoint routed to centralized service")
+
+    service = _submission_service()
+
+    from application.browser import open_driver
+    driver = open_driver(headless=False)
     try:
-        result = platform.fill_and_submit(
-            app_obj.job_url,
-            fields=app_obj.answers,
-            files={},
-        )
-        if result.success:
-            app_obj.update_status(ApplicationStatus.SUBMITTED)
-            app_obj.submitted = True
-            app_obj.submission_url = result.application_url or app_obj.job_url
-            app_obj.submission_time = app_obj.updated_at
-            app_obj.date_submitted = app_obj.updated_at
-            app_obj.submission_platform = platform.name
-            app_obj.confirmation_id = result.confirmation_id
-        else:
-            if result.requires_human_input:
-                app_obj.update_status(ApplicationStatus.MANUAL_ACTION_REQUIRED)
-                app_obj.notes.append("Requires manual submission — browser automation could not complete")
-            else:
-                app_obj.update_status(ApplicationStatus.FAILED)
-            app_obj.errors.append(result.error)
-    except Exception as exc:
-        app_obj.update_status(ApplicationStatus.FAILED)
-        app_obj.errors.append(str(exc))
+        # Legacy applications may lack form_analysis and fill_plan.
+        # Use reprepare() to navigate to the real page, analyse the form,
+        # build a proper fill plan with CSS selectors, and update
+        # app_obj.form_analysis so confirm_and_submit() can locate the
+        # submit button.
+        plan = None
+        if not app_obj.form_analysis and app_obj.application_url:
+            profile = load_profile()
+            if profile is not None:
+                plan = service.reprepare(app_obj, profile, driver)
 
-    tracker.update(app_obj)
-    return jsonify({"ok": True, "application": app_obj.to_preview()})
+        if plan is None and app_obj.fill_plan:
+            from application.form_filler import FillPlan, PlannedAnswer
+            plan = FillPlan(entries=[
+                PlannedAnswer(**e) for e in app_obj.fill_plan
+            ])
+
+        if plan is None:
+            from application.form_filler import FillPlan, PlannedAnswer
+            plan_entries = []
+            for q, v in (app_obj.answers or {}).items():
+                plan_entries.append(PlannedAnswer(
+                    question=q, value=v, answer_type="verified",
+                    source="user", needs_user=False,
+                ))
+            plan = FillPlan(entries=plan_entries)
+
+        result = service.confirm_and_submit(
+            app_obj, tracker, driver,
+            consent_granted=True,
+            user_answers={},
+            plan=plan,
+        )
+    except BrowserUnavailable as exc:
+        app_obj.update_status(S.REQUIRES_USER_ACTION)
+        app_obj.error = str(exc)
+        tracker.update(app_obj)
+        return jsonify({"ok": True, "application": app_obj.to_preview()})
+    except (BrowserError, ApplicationAutomationError) as exc:
+        return jsonify({"error": str(exc)}), 400
+    finally:
+        try:
+            driver.close()
+        except Exception:
+            pass
+
+    tracker.update(result)
+    return jsonify({"ok": True, "application": result.to_preview()})
 
 
 @app.route("/api/applications/<app_id>/cancel", methods=["POST"])

@@ -71,8 +71,8 @@ _ALLOWED: dict[ApplicationStatus, frozenset[ApplicationStatus]] = {
     }),
     # legacy approval state maps onto the same confirmation gate
     S.AWAITING_APPROVAL: frozenset({
-        S.USER_VERIFIED, S.SUBMITTING, S.SUBMITTED, S.REQUIRES_USER_ACTION,
-        S.FAILED, S.WITHDRAWN,
+        S.READY_FOR_REVIEW, S.USER_VERIFIED, S.SUBMITTING, S.SUBMITTED,
+        S.REQUIRES_USER_ACTION, S.FAILED, S.WITHDRAWN,
     }),
     S.USER_VERIFIED: frozenset({
         S.SUBMITTING, S.SUBMITTED, S.REQUIRES_USER_ACTION, S.FAILED, S.BLOCKED,

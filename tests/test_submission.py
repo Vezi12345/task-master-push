@@ -78,6 +78,30 @@ class _Tracker:
     def find_by_job_id(self, job_id):
         return next((a for a in self.apps.values() if a.job_id == job_id), None)
 
+    def is_duplicate(self, job_id):
+        existing = self.find_by_job_id(job_id)
+        if existing is None:
+            return False
+        if getattr(existing, "submitted", False):
+            return True
+        from application.models import ApplicationStatus
+        if getattr(existing, "status", None) in (
+            ApplicationStatus.SUBMITTED,
+            ApplicationStatus.AWAITING_CONFIRMATION,
+            ApplicationStatus.CONFIRMED,
+            ApplicationStatus.PENDING,
+            ApplicationStatus.INTERVIEW,
+            ApplicationStatus.OFFER,
+            ApplicationStatus.READY_FOR_REVIEW,
+            ApplicationStatus.SUBMITTING,
+            ApplicationStatus.USER_VERIFIED,
+            ApplicationStatus.REQUIRES_USER_ACTION,
+            ApplicationStatus.BLOCKED,
+            ApplicationStatus.MANUAL_ACTION_REQUIRED,
+        ):
+            return True
+        return False
+
     def add(self, app):
         self.apps[app.id] = app
 

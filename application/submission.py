@@ -211,10 +211,8 @@ class ApplicationAutomationService:
         page_html: Optional[str] = None,
     ) -> Application:
         """Walk DISCOVERED → READY_FOR_REVIEW. Always stops at review."""
-        existing = tracker.find_by_job_id(job.id)
-        if existing is not None and existing.status not in (
-            ApplicationStatus.WITHDRAWN, ApplicationStatus.REJECTED,
-        ):
+        if tracker.is_duplicate(job.id):
+            existing = tracker.find_by_job_id(job.id)
             return existing
 
         app = Application(
@@ -564,7 +562,11 @@ class ApplicationAutomationService:
     ) -> FillPlan:
         """Re-navigate to the real application page and re-fill the form so a
         submission can be confirmed in a LATER request (fresh browser
-        session). Raises BrowserError/BrowserUnavailable on failure."""
+        session). Raises BrowserError/BrowserUnavailable on failure.
+
+        Also updates ``app.form_analysis`` with the submit button selector
+        discovered during form analysis so that ``confirm_and_submit()`` can
+        locate and click the submit button."""
         driver.start()
         snapshot = driver.goto(app.application_url)
         if not snapshot.status_ok:
@@ -578,6 +580,15 @@ class ApplicationAutomationService:
         )
         if analysis.challenge is not None:
             raise BrowserError(analysis.challenge.user_message())
+
+        # Ensure the app carries the submit selector so confirm_and_submit()
+        # can locate the button.  This is critical for legacy applications
+        # that were prepared without browser form analysis.
+        if not app.form_analysis:
+            app.form_analysis = analysis.summary()
+        if analysis.submit_button is not None:
+            app.form_analysis["submit_selector"] = analysis.submit_button.selector
+
         filler = FormFiller(cv_path=self._cv_path, cover_letter_path=self._cover_letter_path)
         remembered = {
             getattr(m, "question", ""): getattr(m, "answer", "")
@@ -595,6 +606,7 @@ class ApplicationAutomationService:
         return plan
 
     def _apply_plan(self, driver: BrowserDriver, plan: FillPlan) -> list[str]:
+        import re as _re
         errors: list[str] = []
         for entry in plan.entries:
             if entry.needs_user or entry.value is None:
@@ -608,6 +620,14 @@ class ApplicationAutomationService:
                     driver.click(f'{entry.selector}[value="{entry.value}"]')
                 elif entry.field_type == "checkbox":
                     driver.set_checkbox(entry.selector, True)
+                elif entry.field_type == "number":
+                    if _re.fullmatch(r"\d+(\.\d+)?", entry.value.strip()):
+                        driver.fill(entry.selector, entry.value.strip())
+                    else:
+                        errors.append(
+                            f"{entry.question}: skipped — "
+                            f"non-numeric value for number input: {entry.value!r}"
+                        )
                 else:
                     driver.fill(entry.selector, entry.value)
             except BrowserError as exc:

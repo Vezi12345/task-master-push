@@ -127,8 +127,10 @@ def _legacy_search(region, llm) -> None:
     print()
     command = input("[search / edit / quit]> ").strip().lower()
     if command in ("search", "s", "go", "run"):
-        jobs, messages = orchestrator.search_jobs(result.query, region)
-        ranked = orchestrator.rank_jobs(jobs, result.query, llm)
+        from agent.search import search_jobs
+        from agent.rank import rank_jobs
+        jobs, messages = search_jobs(result.query, region)
+        ranked = rank_jobs(jobs, result.query, llm)
         for message in messages:
             print(f"  searching: {message}")
         print(f"  found {len(jobs)} jobs -> {len(ranked)} after filtering.\n")
