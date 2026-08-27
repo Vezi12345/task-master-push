@@ -127,6 +127,70 @@ def _run(env, profile, ranked):
     )
 
 
+def test_autonomous_run_ages_stale_pending(tmp_path, env):
+    """Passing an OutcomeStore makes an autonomous run learn from stale
+    submissions (silence-after-submit is recorded as no_response)."""
+    from datetime import datetime, timedelta
+
+    from application.models import Application, ApplicationStatus
+    from application.outcome_learning import OutcomeStore
+
+    env.holder["profile"] = _profile()
+    tracker = ApplicationTracker(path=tmp_path / "apps.json")
+    tracker.add(Application(
+        id="stale1",
+        job_title="Junior Bookkeeper",
+        job_company="Acme (Pty) Ltd",
+        status=ApplicationStatus.SUBMITTED,
+        submission_mode="real",
+        date_submitted=(datetime.now() - timedelta(days=40)).isoformat(),
+    ))
+
+    store = OutcomeStore(tmp_path / "outcomes.json")
+    run_autonomous_job_search(
+        query_text=None,
+        search_fn=lambda q, p: NS(ranked=[]),
+        service_factory=lambda: NS(),
+        driver_factory=lambda: NS(),
+        tracker=tracker,
+        policy=AutonomyPolicy(min_score=75, max_per_run=1, max_per_day=1),
+        dry_run=True,
+        outcome_store=store,
+    )
+    assert store.get("company:acme_(pty)_ltd").no_response == 1
+
+
+def test_autonomous_run_without_store_skips_aging(tmp_path, env):
+    """No store → the run does not touch or learn from pending apps."""
+    from datetime import datetime, timedelta
+
+    from application.models import Application, ApplicationStatus
+    from application.outcome_learning import OutcomeStore
+
+    env.holder["profile"] = _profile()
+    tracker = ApplicationTracker(path=tmp_path / "apps.json")
+    tracker.add(Application(
+        id="fresh1",
+        job_title="Junior Bookkeeper",
+        job_company="Acme (Pty) Ltd",
+        status=ApplicationStatus.SUBMITTED,
+        submission_mode="real",
+        date_submitted=(datetime.now() - timedelta(days=40)).isoformat(),
+    ))
+
+    store = OutcomeStore(tmp_path / "outcomes2.json")
+    run_autonomous_job_search(
+        query_text=None,
+        search_fn=lambda q, p: NS(ranked=[]),
+        service_factory=lambda: NS(),
+        driver_factory=lambda: NS(),
+        tracker=tracker,
+        policy=AutonomyPolicy(min_score=75, max_per_run=1, max_per_day=1),
+        dry_run=True,
+    )
+    assert store.get("company:acme_(pty)_ltd").no_response == 0
+
+
 # ---------------------------------------------------------------------------
 # per-profession outcomes over the SAME pool — no code changes anywhere
 # ---------------------------------------------------------------------------

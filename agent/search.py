@@ -3,13 +3,17 @@ from __future__ import annotations
 from collections import Counter
 
 from sources.base import Job, JobSource, JobSourceError
+from sources.crawl import CrawlSource
 from sources.dpsa_circular import DpsaCircularSource
 from sources.greenhouse import GreenhouseSource
+from sources.lever import LeverSource
+from sources.recruitee import RecruiteeSource
 from sources.schemaorg import SchemaOrgSource
 from sources.validation import (
     filter_real_jobs,
     normalise_title_key,
 )
+from sources.workable import WorkableSource
 
 from .parse_intent import JobQuery
 from .relevance import filter_relevant_jobs
@@ -18,6 +22,10 @@ SOURCE_REGISTRY: dict[str, type[JobSource]] = {
     "dpsa_circular": DpsaCircularSource,
     "schemaorg": SchemaOrgSource,
     "greenhouse": GreenhouseSource,
+    "lever": LeverSource,
+    "recruitee": RecruiteeSource,
+    "workable": WorkableSource,
+    "crawl": CrawlSource,
 }
 
 

@@ -22,6 +22,7 @@ def client(monkeypatch, tmp_path):
     from candidate import storage as storage_mod
     from candidate.profile import CandidateProfile
     import application.tracker as tracker_mod
+    import application.session as session_mod
     import config as config_mod
 
     monkeypatch.setattr(storage_mod, "PROFILE_FILE", tmp_path / "profile.json")
@@ -30,6 +31,8 @@ def client(monkeypatch, tmp_path):
     # chat agent writes user answers - keep them out of the real store
     monkeypatch.setattr(config_mod, "ANSWERS_FILE", tmp_path / "answers.json")
     monkeypatch.setattr(config_mod, "ANSWER_CONFLICTS_FILE", tmp_path / "conflicts.json")
+    # keep sessions out of the real store and give each test a clean slate
+    monkeypatch.setattr(session_mod, "SESSIONS_DIR", tmp_path / "sessions")
 
     profile = CandidateProfile(
         name="Test User",
@@ -42,9 +45,6 @@ def client(monkeypatch, tmp_path):
     from app import app
 
     app.config["TESTING"] = True
-    # fresh agent per test so pending state never leaks between tests
-    import app as app_module
-    monkeypatch.setattr(app_module, "_chat_agent", None)
     with app.test_client() as c:
         yield c
 
@@ -152,17 +152,19 @@ def test_chat_answers_endpoint_requires_dict(client):
 
 def test_chat_answers_endpoint_updates_store(client, monkeypatch, tmp_path):
     # trigger agent creation through a cheap turn first
-    client.post("/api/chat", json={"message": "show my applications"})
-
-    from app import _get_chat_agent
+    first = client.post("/api/chat", json={"message": "show my applications"})
+    sid = first.get_json()["session_id"]
+    assert sid
 
     resp = client.post(
         "/api/chat/answers",
-        json={"answers": {"right_to_work_sa": "Yes"}},
+        json={"session_id": sid, "answers": {"right_to_work_sa": "Yes"}},
     )
     assert resp.status_code == 200
     data = resp.get_json()
     assert data["error"] is None
+    # the answered turn persist the same, stable session
+    assert data["session_id"] == sid
 
 
 def test_chat_apply_without_cv_is_helpful(client, monkeypatch, tmp_path):

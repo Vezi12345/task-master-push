@@ -75,6 +75,10 @@
       {"token": "offerzen", "name": "OfferZen"},
       {"token": "taxvalet", "name": "TaxValet"}
     ]},
+    {"name": "lever", "enabled": false, "require_south_africa": true, "companies": [], "note": "Add {'site': '<lever-site-slug>', 'name': 'Company'} entries, then set enabled=true."},
+    {"name": "recruitee", "enabled": false, "require_south_africa": true, "companies": [], "note": "Add {'subdomain': '<company>', 'name': 'Company'} entries (company.recruitee.com), then set enabled=true."},
+    {"name": "workable", "enabled": false, "require_south_africa": true, "companies": [], "note": "Add {'account': '<account-slug>', 'name': 'Company'} entries (apply.workable.com/<account>), then set enabled=true."},
+    {"name": "crawl", "enabled": false, "require_south_africa": true, "careers": [], "polite_delay": 0.4, "note": "Add {'url': '<https://company/careers>', 'name': 'Company', 'sitemap': '<optional custom sitemap path>'}. Crawls the site sitemap for JobPosting pages."},
     {"name": "schemaorg", "enabled": false, "search_url": "", "note": "Set 'search_url' to a board search page (e.g. a za.indeed.com search URL), then set enabled=true."}
   ]
 }

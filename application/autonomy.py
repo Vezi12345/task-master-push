@@ -38,6 +38,7 @@ from config import (
     MAX_APPLICATIONS_PER_RUN,
     MIN_APPLICATION_SCORE,
 )
+from application.session import MODE_AUTONOMOUS_PAUSED, MODE_IDLE
 from sources.base import Job
 
 # questions where a wrong guess would materially damage the application
@@ -316,6 +317,9 @@ def run_autonomous_job_search(
     connector=None,
     policy: AutonomyPolicy = None,
     dry_run: bool = False,
+    session=None,
+    pause_on_input: bool = False,
+    outcome_store=None,
 ) -> dict:
     """Full autonomous pipeline. Returns a structured execution report.
 
@@ -323,10 +327,38 @@ def run_autonomous_job_search(
     ``driver_factory() -> BrowserDriver`` are injectable so tests can run the
     whole flow without network or browser. ``dry_run`` stops right after
     selection (no applications are opened).
+
+    When ``session`` and ``pause_on_input`` are given, a job that needs an
+    answer the agent may not guess (a critical/mandatory unknown, or an
+    AI draft that fails validation) PAUSES the run instead of silently
+    skipping it: the pending question is recorded on the session (mode
+    ``autonomous_paused``), the remaining jobs are held back, and the user
+    answers in conversation; ``resume_autonomous_job_search`` then carries
+    on from exactly that job.  Without ``pause_on_input`` the historical
+    behaviour is preserved (the job is logged REQUIRES_USER_INPUT and the
+    run continues).
     """
     started = datetime.now().isoformat()
     policy = policy or AutonomyPolicy()
     tracker = tracker if tracker is not None else _default_tracker()
+
+    # outcome-learning: age stale pending submissions so silence is learned
+    # from, before the run makes new decisions. No store → no-op.
+    if outcome_store is not None:
+        from .models import ApplicationStatus
+        from .outcome_learning import age_application
+        stale = (
+            tracker.by_status(ApplicationStatus.SUBMITTED)
+            + tracker.by_status(ApplicationStatus.AWAITING_CONFIRMATION)
+            + tracker.by_status(ApplicationStatus.CONFIRMED)
+            + tracker.by_status(ApplicationStatus.PENDING)
+        )
+        for app in stale:
+            try:
+                if age_application(app, outcome_store):
+                    tracker.update(app)
+            except Exception:
+                continue
 
     report: dict = {
         "started_at": started,
@@ -390,6 +422,21 @@ def run_autonomous_job_search(
     report["skipped"] = [d.to_dict() | {"outcome": "SKIPPED"} for d in skipped]
     report["suitable_jobs"] = len(selected)
 
+    # persist the selected-but-not-yet-submitted jobs so a paused run can
+    # resume EXACTLY where it left off without re-searching.
+    report["pending_selected"] = [
+        {
+            "title": d.job.title,
+            "company": d.job.company,
+            "location": d.job.location or "",
+            "url": d.job.url or "",
+            "description": d.job.description or "",
+            "score": d.suitability,
+            "reason": d.reason,
+        }
+        for d in selected
+    ]
+
     if dry_run:
         report["dry_run"] = True
         report["applications"] = [d.to_dict() | {"outcome": "DRY_RUN"} for d in selected]
@@ -402,7 +449,51 @@ def run_autonomous_job_search(
     service = (service_factory() if service_factory is not None
                else _default_service_factory())
 
-    for d in selected:
+    processed_report = _process_selected_applications(
+        selected,
+        report,
+        profile=profile,
+        tracker=tracker,
+        driver=driver,
+        driver_factory=driver_factory,
+        service=service,
+        connector=connector,
+        finish=finish,
+        session=session,
+        pause_on_input=pause_on_input,
+        outcome_store=outcome_store,
+    )
+    # _process_selected_applications may have paused the run and called
+    # finish() itself; in that case it returns the already-finished report.
+    return processed_report
+
+
+def _process_selected_applications(
+    selected,
+    report: dict,
+    *,
+    profile,
+    tracker,
+    driver,
+    driver_factory,
+    service,
+    connector,
+    finish,
+    session=None,
+    pause_on_input: bool = False,
+    outcome_store=None,
+) -> dict:
+    """Run the prepare→answer→humanise→validate→submit loop over ``selected``.
+
+    When a job needs an answer the agent may not guess and ``pause_on_input``
+    is set with a ``session``, the loop records the open question on the
+    session, marks the report paused, and returns early (the run continues
+    later via ``resume_autonomous_job_search``).
+    """
+    from application.lifecycle import transition
+    from application.models import ApplicationStatus
+
+    for index, d in enumerate(selected):
         entry = {
             "company": d.job.company,
             "title": d.job.title,
@@ -427,8 +518,6 @@ def run_autonomous_job_search(
             readiness = evaluate_plan_readiness(app_obj.fill_plan or [])
             if not readiness["ready"]:
                 # critical unknowns must NEVER be guessed — stop safely
-                from application.lifecycle import transition
-                from application.models import ApplicationStatus
                 missing = readiness["critical_missing"] + readiness["noncritical_missing"]
                 transition(app_obj, ApplicationStatus.REQUIRES_USER_ACTION,
                            "Autonomous run stopped: unanswered required questions")
@@ -436,13 +525,26 @@ def run_autonomous_job_search(
                 tracker.update(app_obj)
                 entry["outcome"] = "REQUIRES_USER_INPUT"
                 entry["detail"] = app_obj.error
+                if pause_on_input and session is not None:
+                    return _pause_for_input(
+                        report, session, finish,
+                        paused_index=index, app_id=app_obj.id,
+                        questions=missing,
+                    )
                 continue
 
             # humanise AI-drafted answers, validate against profile
             ok_to_submit = _humanise_generated_answers(app_obj, profile)
             if not ok_to_submit:
                 entry["outcome"] = "REQUIRES_USER_INPUT"
-                entry["detail"] = "generated draft failed validation against your profile"
+                entry["detail"] = app_obj.error or "generated draft failed validation"
+                if pause_on_input and session is not None:
+                    return _pause_for_input(
+                        report, session, finish,
+                        paused_index=index, app_id=app_obj.id,
+                        questions=[],
+                        reason=entry["detail"],
+                    )
                 continue
 
             if driver is None:
@@ -476,6 +578,290 @@ def run_autonomous_job_search(
             report["confirmation_check"] = {"error": str(exc)[:200]}
 
     return finish()
+
+
+def _pause_for_input(
+    report: dict,
+    session,
+    finish,
+    *,
+    paused_index: int,
+    app_id: str,
+    questions: list[str],
+    reason: str = "",
+) -> dict:
+    """Record why a run paused and stop, so the user can answer and resume.
+
+    The paused job's index into ``pending_selected`` lets resume continue
+    from exactly that job; the open question(s) are surfaced in the session
+    so the chat layer can ask the user."""
+    report["paused"] = True
+    report["paused_index"] = paused_index
+    report["paused_app_id"] = app_id
+    report["paused_reason"] = reason or (", ".join(questions) if questions else "")
+    report["pending_questions"] = [
+        {"field_key": "", "question": q} for q in questions
+    ]
+
+    if session is not None:
+        from application.session import MODE_AUTONOMOUS_PAUSED
+        session.mode = MODE_AUTONOMOUS_PAUSED
+        session.pending_questions = report["pending_questions"]
+        session.questions_by_app = {app_id: report["pending_questions"]}
+        session.autonomous = {
+            "paused_app_id": app_id,
+            "paused_index": paused_index,
+            "questions": list(questions),
+            "reason": report["paused_reason"],
+        }
+        session.save()
+
+    return finish("AUTONOMOUS RUN PAUSED — waiting for your input")
+
+
+def resume_autonomous_job_search(
+    session,
+    answers: dict,
+    *,
+    tracker=None,
+    connector=None,
+    policy: AutonomyPolicy = None,
+    service_factory: Optional[Callable] = None,
+    driver_factory: Optional[Callable] = None,
+    outcome_store=None,
+) -> dict:
+    """Resume a paused autonomous run after the user answers its questions.
+
+    ``answers`` are stored on the candidate profile memory (so future jobs
+    reuse them) and applied to the paused application, then the remaining
+    selected jobs are processed exactly as the original run would have."""
+    policy = policy or AutonomyPolicy()
+    tracker = tracker if tracker is not None else _default_tracker()
+    from candidate.storage import load_profile, save_profile
+    profile = load_profile()
+    if profile is None:
+        raise ValueError("No candidate profile found — upload your CV first")
+
+    auto = (session.autonomous or {}) if session is not None else {}
+    paused_app_id = auto.get("paused_app_id")
+    paused_index = int(auto.get("paused_index", 0) or 0)
+
+    if not (tracker and paused_app_id):
+        raise ValueError("No paused autonomous run found on this session")
+
+    # remember answers on the profile so remaining jobs reuse them
+    for key, value in answers.items():
+        if not str(value).strip():
+            continue
+        profile.set_known(str(key), str(value), "user")
+        profile.remember_answer(str(key), str(value), field_key=str(key))
+    save_profile(profile)
+
+    # finish the paused application first: fold the user's answers into its
+    # fill plan, then humanise + validate + submit exactly as the loop would.
+    report = _load_latest_report()
+    # clear the pause markers left by the original run so this resumed run's
+    # report is a clean continuation, not a still-paused one
+    for key in ("paused", "paused_index", "paused_app_id",
+                "paused_reason", "pending_questions"):
+        report.pop(key, None)
+    service = (service_factory() if service_factory is not None
+               else _default_service_factory())
+    driver = driver_factory() if driver_factory is not None else None
+    paused_app = tracker.get(paused_app_id)
+
+    def finish(extra_summary: str = "") -> dict:
+        report["finished_at"] = datetime.now().isoformat()
+        report["summary"] = extra_summary or _render_report_text(report)
+        _save_report(report)
+        return report
+
+    if paused_app is not None:
+        applied = _apply_answers_to_plan(paused_app, answers)
+        paused_entry = _submit_existing_app(
+            paused_app, applied, profile, tracker, driver=driver,
+            service=service, connector=connector, outcome_store=outcome_store,
+        )
+        report.setdefault("applications", []).append(paused_entry)
+        # clear the pause marker on the session so a later resume knows we
+        # moved past this job
+        if session is not None and session.autonomous:
+            session.autonomous["paused_app_id"] = ""
+            session.autonomous["paused_index"] = paused_index + 1
+            session.mode = MODE_AUTONOMOUS_PAUSED if _jobs_still_pending(
+                report, paused_index + 1) else MODE_IDLE
+
+    # continue with any remaining selected-but-unprocessed jobs
+    from application.models import ApplicationStatus as S
+    from sources.base import Job
+    from types import SimpleNamespace as NS
+
+    def _as_decision(desc: dict):
+        job = Job(
+            id="", title=desc.get("title", ""),
+            company=desc.get("company", ""),
+            location=desc.get("location", ""),
+            url=desc.get("url", ""),
+            description=desc.get("description", ""),
+            source="autonomous_resume",
+        )
+        return NS(
+            job=job,
+            suitability=int(desc.get("score", 0)),
+            reason=desc.get("reason", ""),
+            reasons=desc.get("reasons", []),
+            explanation=desc.get("explanation", ""),
+            missing_preferred=desc.get("missing_preferred", []),
+        )
+
+    pending_desc = report.get("pending_selected", [])
+    remaining = [
+        _as_decision(x) for x in pending_desc[paused_index + 1:]
+        if not _already_handled(x, tracker)
+    ]
+
+    return _process_selected_applications(
+        remaining,
+        report,
+        profile=profile,
+        tracker=tracker,
+        driver=driver,
+        driver_factory=driver_factory,
+        service=service,
+        connector=connector,
+        finish=finish,
+        session=session,
+        pause_on_input=True,
+        outcome_store=outcome_store,
+    )
+
+
+def _jobs_still_pending(report: dict, start_index: int) -> bool:
+    return start_index < len(report.get("pending_selected", []))
+
+
+def _apply_answers_to_plan(app, answers: dict) -> list[dict]:
+    """Fold user answers into an application's stored fill plan.
+
+    Matches on the entry's field_key, then question text.  Returns the
+    (possibly new) plan entry list so the caller can pass it to the
+    submit helper."""
+    plan = list(app.fill_plan or [])
+    changed = False
+    for key, value in answers.items():
+        if not str(value).strip():
+            continue
+        key_l = str(key).lower()
+        matched = False
+        for e in plan:
+            if str(e.get("name") or e.get("field_key") or "").lower() == key_l:
+                e["value"] = str(value)
+                e["needs_user"] = False
+                e["answer_type"] = "verified"
+                e["source"] = "user"
+                matched = True
+                changed = True
+                break
+        if not matched:
+            for e in plan:
+                q = str(e.get("question", "")).lower()
+                if key_l and (key_l in q or q in key_l):
+                    e["value"] = str(value)
+                    e["needs_user"] = False
+                    e["answer_type"] = "verified"
+                    e["source"] = "user"
+                    changed = True
+                    break
+    if changed:
+        app.fill_plan = plan
+    return plan
+
+
+def _submit_existing_app(app, plan_entries, profile, tracker, *,
+                         driver, service, connector, outcome_store=None) -> dict:
+    """Submit an already-prepared application (a paused/blocked one) after
+    answers have been folded in.  Mirrors the in-loop submit step."""
+    from application.form_filler import FillPlan, PlannedAnswer
+    from application.models import ApplicationStatus
+
+    entry = {
+        "company": app.job_company,
+        "title": app.job_title,
+        "score": int(getattr(app, "candidate_match_score", 0) or 0),
+        "reason": app.job_title or "",
+        "reasons": [],
+        "explanation": "",
+        "missing_preferred": [],
+        "application_id": app.id,
+        "outcome": "",
+        "detail": "",
+    }
+
+    try:
+        # humanise AI-drafted answers, validate against profile
+        ok_to_submit = _humanise_generated_answers(app, profile)
+        if not ok_to_submit:
+            entry["outcome"] = "REQUIRES_USER_INPUT"
+            entry["detail"] = app.error or "generated draft failed validation"
+            return entry
+
+        from application.lifecycle import transition
+        transition(app, ApplicationStatus.READY_FOR_REVIEW,
+                   "Resumed autonomous run after user answered",
+                   outcome_store=outcome_store)
+        if driver is None:
+            from application.browser import open_driver
+            driver = open_driver(prefer_headless=True)
+        fresh_plan = FillPlan(entries=[PlannedAnswer(**e) for e in plan_entries])
+        result = service.confirm_and_submit(
+            app, tracker, driver,
+            consent_granted=True,
+            user_answers={},
+            plan=fresh_plan,
+        )
+        entry["outcome"] = (str(result.status.value)
+                            if hasattr(result.status, "value")
+                            else str(result.status))
+        entry["detail"] = (result.confirmation_text or result.error or "")[:300]
+    except Exception as exc:
+        entry["outcome"] = "FAILED"
+        entry["detail"] = str(exc)[:300]
+    return entry
+
+
+def _already_handled(decision, tracker) -> bool:
+    """True if a (resumed) job descriptor corresponds to an already-recorded,
+    partially-or-fully handled application that must not be re-prepared.
+
+    ``decision`` may be a JobDecision-like object (with ``.job``) or a plain
+    dict with ``title``/``company`` keys."""
+    from application.models import ApplicationStatus
+    job = getattr(decision, "job", None)
+    if job is not None:
+        title = (job.title or "").lower()
+        company = (job.company or "").lower()
+    else:
+        title = (decision.get("title", "") or "").lower()
+        company = (decision.get("company", "") or "").lower()
+    for app in tracker.all():
+        if ((app.job_title or "").lower() == title and
+                (app.job_company or "").lower() == company):
+            return True
+    return False
+
+
+def _load_latest_report() -> Optional[dict]:
+    import config as cfg
+    runs_dir = cfg.AUTONOMOUS_RUNS_DIR
+    if not runs_dir.exists():
+        return {}
+    reports = sorted(runs_dir.glob("run_*.json"), reverse=True)
+    if not reports:
+        return {}
+    try:
+        return json.loads(reports[0].read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
 
 
 # ---------------------------------------------------------------------------

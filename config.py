@@ -31,6 +31,7 @@ MIN_APPLICATION_SCORE = int(os.environ.get("TASK_MASTER_MIN_APPLICATION_SCORE", 
 MAX_APPLICATIONS_PER_RUN = int(os.environ.get("TASK_MASTER_MAX_APPLICATIONS_PER_RUN", "5"))
 MAX_APPLICATIONS_PER_DAY = int(os.environ.get("TASK_MASTER_MAX_APPLICATIONS_PER_DAY", "10"))
 AUTONOMOUS_RUNS_DIR = DATA_DIR / "autonomous_runs"
+OUTCOMES_FILE = DATA_DIR / "outcomes.json"
 
 
 def load_region(name: str = DEFAULT_REGION) -> dict:

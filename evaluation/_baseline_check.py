@@ -1,0 +1,15 @@
+from evaluation.national_runner import run_national_evaluation
+
+m = run_national_evaluation()
+print(f"NDCG@10:        {m['ndcg_10']:.3f}")
+print(f"P@3:            {m['precision_3']:.3f}")
+print(f"P@10:           {m['precision_10']:.3f}")
+print(f"R@10:           {m['recall_10']:.3f}")
+print(f"MRR:            {m['mrr']:.3f}")
+print(f"Corpus:         {m['corpus']['canonical_jobs']}")
+print(f"Queries:        {m['num_queries']}")
+print(f"Queries w/gold: {m['queries_with_gold']}")
+print(f"NDCG w/gold:    {m['ndcg_with_gold']:.3f}")
+print(f"Zero rate:      {m['zero_result_rate']:.3f}")
+print(f"Base NDCG:      {m['base_ndcg']:.3f}")
+print(f"Delta (rank-base): {m['ndcg_10'] - m['base_ndcg']:.3f}")
