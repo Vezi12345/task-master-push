@@ -24,6 +24,11 @@ from candidate.storage import load_profile, save_profile
 from agent.parse_intent import JobQuery, UserIntent, parse_user_intent
 from agent.rank import RankedJob, rank_jobs
 from agent.search import search_jobs
+from application.session import (
+    MODE_AWAITING_APPROVAL,
+    MODE_IDLE,
+    MODE_NEEDS_INFORMATION,
+)
 from sources.base import Job
 
 _SEARCH_VERB_RE = re.compile(
@@ -93,6 +98,7 @@ class JobApplicationAgent:
         region: dict,
         llm=None,
         answer_store_path=None,
+        session=None,
     ) -> None:
         self.region = region
         self.llm = llm
@@ -103,12 +109,19 @@ class JobApplicationAgent:
         self.last_matched: list[dict] = []
         self.pending_applications: list[Application] = []
         self.messages: list[AgentMessage] = []
+        # Durable conversational context (see application/session).  When set,
+        # pending_applications / last_query are restored from and persisted to
+        # it so an interrupted flow can resume across requests/restarts.
+        self.session = session
 
         self.question_engine = QuestionEngine(
             AnswerStore(answer_store_path) if answer_store_path else AnswerStore()
         )
         self.document_engine = ApplicationDocuments(llm)
         self.tracker = ApplicationTracker()
+
+        if self.session is not None:
+            self._restore_session()
 
     def _msg(self, content: str, message_type: str = "text", data: dict = None) -> AgentMessage:
         msg = AgentMessage(
@@ -119,6 +132,60 @@ class JobApplicationAgent:
         )
         self.messages.append(msg)
         return msg
+
+    # -- durable session support ------------------------------------------
+    def _restore_session(self) -> None:
+        """Rehydrate last_query and pending_applications from the session."""
+        if self.session is None:
+            return
+        if self.session.last_query:
+            try:
+                self.last_query = JobQuery(**self.session.last_query)
+            except Exception:
+                self.last_query = None
+        self.pending_applications = [
+            self.tracker.get(aid) for aid in self.session.pending_application_ids
+            if self.tracker.get(aid) is not None
+        ]
+        # keep the session's snapshot of "what the agent is waiting on" in sync
+        # with the tracker once restored.
+        if self.session.mode == MODE_NEEDS_INFORMATION and not self._pending_questions():
+            self.session.questions_by_app = {}
+        self._persist_session()
+
+    def _persist_session(self) -> None:
+        if self.session is None:
+            return
+        self.session.last_query = (
+            self.last_query.model_dump() if self.last_query is not None else None
+        )
+        self.session.pending_application_ids = [
+            a.id for a in self.pending_applications
+        ]
+        self.session.touch()
+
+    def _pending_questions(self) -> dict:
+        """Map of application id → list of outstanding MissingInfo questions
+        currently attached to this agent's pending applications."""
+        out: dict[str, list] = {}
+        for app in self.pending_applications:
+            if app.status in (
+                ApplicationStatus.NEEDS_INFORMATION,
+                ApplicationStatus.REQUIRES_USER_ACTION,
+            ) and app.missing_information:
+                out[app.id] = [
+                    {"field_key": m.field_key, "question": m.question}
+                    for m in app.missing_information
+                ]
+        return out
+
+    def _snapshot_mode(self, state: AgentState) -> str:
+        """Derive the durable session mode from an agent result state."""
+        if state in (AgentState.AWAITING_APPROVAL,):
+            return MODE_AWAITING_APPROVAL
+        if state == AgentState.NEEDS_INFORMATION:
+            return MODE_NEEDS_INFORMATION
+        return MODE_IDLE
 
     def process_input(self, user_input: str) -> AgentResult:
         # each conversational turn stands alone: never replay earlier turns
@@ -131,36 +198,49 @@ class JobApplicationAgent:
         intent = parse_user_intent(user_input, self.region, self.llm)
 
         if intent.intent_type == "show_applications":
-            return self._handle_show_applications()
-        if intent.intent_type == "needs_attention":
-            return self._handle_needs_attention()
-        if intent.intent_type == "approve":
-            return self._handle_approve(intent.target_id)
-        if intent.intent_type == "cancel":
-            return self._handle_cancel(intent.target_id)
-        if intent.intent_type == "apply":
-            return self._handle_apply(intent)
-        if intent.intent_type == "search":
+            result = self._handle_show_applications()
+        elif intent.intent_type == "needs_attention":
+            result = self._handle_needs_attention()
+        elif intent.intent_type == "approve":
+            result = self._handle_approve(intent.target_id)
+        elif intent.intent_type == "cancel":
+            result = self._handle_cancel(intent.target_id)
+        elif intent.intent_type == "apply":
+            result = self._handle_apply(intent)
+        elif intent.intent_type == "search":
             query = intent.search_query
             message_text = intent.message or ""
             looks_like_search = bool(
                 query is not None and (query.roles or query.skills)
             ) or bool(_SEARCH_VERB_RE.search(message_text))
             if not looks_like_search:
-                return AgentResult(
+                result = AgentResult(
                     state=self.state,
                     messages=list(self.messages),
                     profile=self.profile,
                     error="I didn't understand that. Try searching for jobs or managing applications.",
                 )
-            return self._handle_search(intent)
+            else:
+                result = self._handle_search(intent)
+        else:
+            result = AgentResult(
+                state=self.state,
+                messages=list(self.messages),
+                profile=self.profile,
+                error="I didn't understand that. Try searching for jobs or managing applications.",
+            )
 
-        return AgentResult(
-            state=self.state,
-            messages=list(self.messages),
-            profile=self.profile,
-            error="I didn't understand that. Try searching for jobs or managing applications.",
-        )
+        return self._finish_agent_result(result)
+
+    def _finish_agent_result(self, result: AgentResult) -> AgentResult:
+        """Persist durable session state derived from a finished turn."""
+        if self.session is not None:
+            self._persist_session()
+            self.session.mode = self._snapshot_mode(result.state)
+            self.session.pending_questions = self._pending_questions()
+            self.session.questions_by_app = self.session.pending_questions
+            self.session.touch()
+        return result
 
     def _handle_search(self, intent: UserIntent) -> AgentResult:
         query = intent.search_query
@@ -765,11 +845,13 @@ class JobApplicationAgent:
                 f"{len(still_pending)} application(s) still need information."
             )
 
-        return AgentResult(
-            state=self.state,
-            messages=list(self.messages),
-            profile=self.profile,
-            applications=self.pending_applications,
+        return self._finish_agent_result(
+            AgentResult(
+                state=self.state,
+                messages=list(self.messages),
+                profile=self.profile,
+                applications=self.pending_applications,
+            )
         )
 
     def _format_query_understood(self, query: JobQuery) -> str:

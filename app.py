@@ -971,12 +971,27 @@ _CHAT_HELP = (
 )
 
 
-def _get_chat_agent():
-    global _chat_agent
-    if _chat_agent is None:
-        from agent.orchestrator import JobApplicationAgent
-        _chat_agent = JobApplicationAgent(region, llm)
-    return _chat_agent
+def _get_session_store():
+    from application.session import SessionStore
+    return SessionStore()
+
+
+def _get_chat_agent(session_id=None):
+    """Return (agent, SessionState) for a chat interaction.
+
+    A session ties an agent's durable intent state (last query, pending
+    applications, questions it is waiting on) to a client-supplied
+    idempotent session_id so a multi-turn flow survives server restarts and
+    can be resumed from a new browser tab."""
+    from agent.orchestrator import JobApplicationAgent
+    from application.session import SessionStore
+
+    store = SessionStore()
+    state = store.load(session_id) if session_id else None
+    if state is None:
+        state = store.create()
+    agent = JobApplicationAgent(region, llm, session=state)
+    return agent, state
 
 
 def _chat_payload(result) -> dict:
@@ -1016,15 +1031,116 @@ def _chat_payload(result) -> dict:
     return payload
 
 
+def _resume_payload(state) -> dict:
+    """Payload describing a paused session so the UI can resume it without
+    asking the user to re-type a full command."""
+    from agent.orchestrator import JobApplicationAgent
+    mode = state.mode
+    reply = ""
+    apps = []
+
+    if mode == "awaiting_approval":
+        ids = state.pending_application_ids
+        from application.tracker import ApplicationTracker
+        tracker = ApplicationTracker()
+        apps = [tracker.get(aid) for aid in ids]
+        apps = [a for a in apps if a is not None]
+        reply = _format_resume_approval(apps)
+    elif mode == "autonomous_paused":
+        auto = state.autonomous or {}
+        questions = auto.get("questions") or []
+        reply = ("An autonomous run was paused because it needs information "
+                 "from you:\n" +
+                 "\n".join(f"  - {q}" for q in questions) +
+                 "\n\nReply with your answers (POST /api/autonomous/resume "
+                 "with session_id and answers) and I'll continue the run.")
+        return {
+            "state": "autonomous_paused",
+            "reply": reply,
+            "error": None,
+            "has_cv": True,
+            "awaiting_approval": False,
+            "needs_answers": bool(questions),
+            "missing_information": [
+                {"field_key": "", "question": q} for q in questions
+            ],
+            "applications": [],
+            "application_summaries": [],
+            "autonomous_paused": True,
+            "resumed": True,
+        }
+    elif mode == "needs_information":
+        qs = state.questions_by_app or state.pending_questions or {}
+        flattened: list[dict] = []
+        for questions in qs.values():
+            for q in questions:
+                flattened.append({"field_key": q.get("field_key", ""),
+                                  "question": q.get("question", "")})
+        reply = "You have pending questions I asked earlier. Reply with your answers and I'll continue."
+        return {
+            "state": "needs_information",
+            "reply": reply,
+            "error": None,
+            "has_cv": True,
+            "awaiting_approval": False,
+            "needs_answers": True,
+            "missing_information": flattened,
+            "applications": [],
+            "application_summaries": [],
+            "resumed": True,
+        }
+
+    return {
+        "state": mode,
+        "reply": reply or _CHAT_HELP,
+        "error": None,
+        "has_cv": True,
+        "awaiting_approval": mode == "awaiting_approval",
+        "needs_answers": False,
+        "missing_information": [],
+        "applications": [a.to_preview() for a in apps] if apps else [],
+        "application_summaries": [],
+        "resumed": True,
+    }
+
+
+def _format_resume_approval(apps) -> str:
+    from application.models import ApplicationStatus
+    if not apps:
+        return "No applications are currently pending approval."
+    ready = [a for a in apps if a.status in (
+        ApplicationStatus.AWAITING_APPROVAL, ApplicationStatus.READY_FOR_REVIEW)]
+    if not ready:
+        return "No applications are currently pending approval."
+    parts = [f"{len(ready)} application(s) are ready for your review:"]
+    for i, app in enumerate(ready, 1):
+        parts.append(f"  {i}. {app.job_title} - {app.job_company}")
+        parts.append(f"     Match: {app.candidate_match_score}%")
+    parts.append("Reply 'approve' to submit them all, or 'cancel' to abort.")
+    return "\n".join(parts)
+
+
 @app.route("/api/chat", methods=["POST"])
 def api_chat():
     """Conversational endpoint: one user turn in, one structured agent turn out."""
     data = request.get_json(force=True, silent=True) or {}
     message = (data.get("message") or "").strip()
+    session_id = data.get("session_id") or data.get("sessionId")
+
+    # A non-command turn on a paused session resumes the pending flow.
     if not message:
+        if session_id:
+            from application.session import SessionStore
+            state = SessionStore().load(session_id)
+            if state is not None and state.mode in (
+                "awaiting_approval", "needs_information", "autonomous_paused"):
+                payload = _resume_payload(state)
+                payload["session_id"] = session_id
+                return jsonify(payload)
         return jsonify({"error": "Empty message"}), 400
 
-    agent_obj = _get_chat_agent()
+    agent_obj, state = _get_chat_agent(session_id)
+    session_id = state.session_id
     try:
         result = agent_obj.process_input(message)
     except Exception as exc:
@@ -1032,9 +1148,15 @@ def api_chat():
             "state": "failed",
             "reply": f"Something went wrong handling that: {exc}",
             "error": str(exc),
+            "session_id": session_id,
         }), 500
 
+    # persist the session that process_input mutated
+    from application.session import SessionStore
+    SessionStore().save(state)
+
     payload = _chat_payload(result)
+    payload["session_id"] = session_id
     if payload["error"]:
         base = payload["reply"] or payload["error"]
         payload["reply"] = f"{base}\n\n{_CHAT_HELP}"
@@ -1051,17 +1173,34 @@ def api_chat_answers():
     if not isinstance(answers, dict) or not answers:
         return jsonify({"error": "No answers provided"}), 400
 
-    agent_obj = _get_chat_agent()
+    session_id = data.get("session_id") or data.get("sessionId")
+    agent_obj, state = _get_chat_agent(session_id)
+    session_id = state.session_id
     result = agent_obj.provide_answers({str(k): str(v) for k, v in answers.items()})
-    return jsonify(_chat_payload(result))
+    from application.session import SessionStore
+    SessionStore().save(state)
+    payload = _chat_payload(result)
+    payload["session_id"] = session_id
+    return jsonify(payload)
 
 
 @app.route("/api/autonomous/run", methods=["POST"])
 def api_autonomous_run():
     """Start one autonomous search→apply run. Started ONLY by an explicit
-    user action; the request body may carry a free-text query and dry_run."""
+    user action; the request body may carry a free-text query, dry_run, and
+    an optional session_id.  When a session_id is supplied the run becomes
+    resumable: if a job needs an answer the agent may not guess, the run
+    pauses (rather than silently skipping) and records the pending question
+    on the session for /api/autonomous/resume to continue."""
     from application.autonomy import AutonomyPolicy, run_autonomous_job_search
+    from application.outcome_learning import OutcomeStore
+    from application.session import SessionStore
     data = request.get_json(force=True, silent=True) or {}
+    session_id = data.get("session_id") or data.get("sessionId")
+    session_state = None
+    if session_id:
+        store = SessionStore()
+        session_state = store.load(session_id) or store.create()
     try:
         policy = None
         if data.get("min_score") is not None:
@@ -1070,9 +1209,47 @@ def api_autonomous_run():
             query_text=(data.get("query") or "").strip(),
             dry_run=bool(data.get("dry_run")),
             policy=policy,
+            session=session_state,
+            pause_on_input=bool(data.get("pause_on_input", True)),
+            outcome_store=OutcomeStore(config.OUTCOMES_FILE),
         )
     except Exception as exc:
         return jsonify({"error": f"Autonomous run failed: {exc}"}), 500
+
+    if session_state is not None:
+        SessionStore().save(session_state)
+        report["session_id"] = session_state.session_id
+    return jsonify(report)
+
+
+@app.route("/api/autonomous/resume", methods=["POST"])
+def api_autonomous_resume():
+    """Resume a paused autonomous run after the user answers its questions."""
+    from application.autonomy import resume_autonomous_job_search
+    from application.outcome_learning import OutcomeStore
+    from application.session import SessionStore
+    data = request.get_json(force=True, silent=True) or {}
+    session_id = data.get("session_id")
+    if not session_id:
+        return jsonify({"error": "session_id is required to resume"}), 400
+    answers = data.get("answers")
+    if not isinstance(answers, dict) or not answers:
+        return jsonify({"error": "No answers provided"}), 400
+
+    store = SessionStore()
+    session_state = store.load(session_id)
+    if session_state is None or not (session_state.autonomous or {}).get("paused_app_id"):
+        return jsonify({"error": "No paused autonomous run found on this session"}), 400
+    try:
+        report = resume_autonomous_job_search(
+            session_state,
+            {str(k): str(v) for k, v in answers.items()},
+            outcome_store=OutcomeStore(config.OUTCOMES_FILE),
+        )
+    except Exception as exc:
+        return jsonify({"error": f"Resume failed: {exc}"}), 500
+    SessionStore().save(session_state)
+    report["session_id"] = session_state.session_id
     return jsonify(report)
 
 

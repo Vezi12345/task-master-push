@@ -17,6 +17,7 @@ import config
 from application import autonomy
 from application.autonomy import (
     AutonomyPolicy,
+    resume_autonomous_job_search,
     run_autonomous_job_search,
 )
 from application.models import Application, ApplicationStatus
@@ -377,3 +378,169 @@ def test_api_autonomous_report_empty_then_present(client, tmp_path):
     (tmp_path / "runs" / "run_x.json").write_text(json.dumps({"ok": 1}),
                                                   encoding="utf-8")
     assert client.get("/api/autonomous/report").get_json() == {"ok": 1}
+
+
+def test_api_autonomous_resume_requires_session(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "APPLICATIONS_FILE", tmp_path / "apps.json")
+    monkeypatch.setattr(config, "AUTONOMOUS_RUNS_DIR", tmp_path / "runs")
+    from app import app as flask_app
+    flask_app.config["TESTING"] = True
+    with flask_app.test_client() as c:
+        res = c.post("/api/autonomous/resume", json={"answers": {"x": "y"}})
+        assert res.status_code == 400
+        assert "session_id" in res.get_json()["error"]
+
+
+def test_api_autonomous_run_accepts_session_and_pauses(monkeypatch, tmp_path):
+    """The /api/autonomous/run endpoint passes a session and pause_on_input
+    through so a run that needs input pauses and is resumable."""
+    from application.session import MODE_AUTONOMOUS_PAUSED, SessionState
+    import application.autonomy as aut_module
+    import app as app_module
+
+    monkeypatch.setattr(config, "APPLICATIONS_FILE", tmp_path / "apps.json")
+    monkeypatch.setattr(config, "AUTONOMOUS_RUNS_DIR", tmp_path / "runs")
+    import application.session as session_mod
+    monkeypatch.setattr(session_mod, "SESSIONS_DIR", tmp_path / "sessions")
+    # pre-create the session so the endpoint loads (rather than recreates) it
+    from application.session import SessionState, SessionStore
+    store = SessionStore()
+    store.save(SessionState(session_id="sess-run-1"))
+    captured = {}
+
+    real_run = aut_module.run_autonomous_job_search
+
+    def fake_run(query_text="", *, dry_run=False, session=None, pause_on_input=False, **kw):
+        captured["pause_on_input"] = pause_on_input
+        captured["session"] = session
+        return {"paused": True, "paused_app_id": "abc123", "pending_questions": [],
+                "session_id": session.session_id if session else None}
+
+    monkeypatch.setattr(aut_module, "run_autonomous_job_search", fake_run)
+
+    from app import app as flask_app
+    flask_app.config["TESTING"] = True
+    with flask_app.test_client() as c:
+        res = c.post("/api/autonomous/run", json={"session_id": "sess-run-1"})
+        assert res.status_code == 200
+        body = res.get_json()
+        assert body["session_id"] == "sess-run-1"
+        assert captured["pause_on_input"] is True
+        assert captured["session"] is not None
+        assert captured["session"].session_id == "sess-run-1"
+
+
+# ---------------------------------------------------------------------------
+# Tier 1.2: pause-on-user-input and resume
+# ---------------------------------------------------------------------------
+
+def _critical_plan(job):
+    return [
+        _plan_entry(question="Phone number", value="082", required=True),
+        _plan_entry(question="Are you a South African citizen?",
+                    value="", required=True),
+    ]
+
+
+def _sane_plan(job):
+    return [
+        _plan_entry(question="Phone number", value="082 000 0000",
+                    required=True),
+        _plan_entry(question="Do you have a driver's licence?",
+                    value="", required=True),
+    ]
+
+
+def test_pause_on_input_stops_run_and_records_question(env, monkeypatch):
+    from application.session import SessionStore, SessionState
+
+    tr = ApplicationTracker(path=env.tracker_path)
+    service = StubService(plan_builder=_critical_plan)
+    store = SessionStore(directory=env.tmp / "sessions")
+    session = store.create()
+
+    ranked = [_ranked("Job A", "Alpha", 92), _ranked("Job B", "Beta", 90)]
+    report = run_autonomous_job_search(
+        search_fn=lambda q, p: NS(ranked=ranked),
+        service_factory=lambda: service,
+        driver_factory=lambda: NS(),
+        tracker=tr,
+        policy=AutonomyPolicy(),
+        session=session,
+        pause_on_input=True,
+    )
+
+    assert report["paused"] is True
+    assert report["paused_app_id"]
+    assert report["pending_questions"], "must record the open question(s)"
+    assert any("citizen" in q["question"] for q in report["pending_questions"])
+    # the run stopped: only Job A was started (never Job B)
+    assert service.calls == [("start", "Job A")]
+    # the session knows it is paused and holds the question
+    assert session.mode == "autonomous_paused"
+    assert session.autonomous["paused_app_id"] == report["paused_app_id"]
+    saved = store.load(session.session_id)
+    assert saved.mode == "autonomous_paused"
+
+    app_obj = tr.get(report["paused_app_id"])
+    assert app_obj.status == ApplicationStatus.REQUIRES_USER_ACTION
+
+
+def test_resume_after_answers_submits_paused_then_continues(env, monkeypatch):
+    from application.session import SessionStore
+
+    tr = ApplicationTracker(path=env.tracker_path)
+
+    # Job A blocks on the licence question (empty required); Job B's plan is
+    # fully answered so it sails through once the run resumes.
+    def builder(job):
+        if job.title == "Job B":
+            return [_plan_entry(question="Phone number", value="082",
+                                required=True)]
+        return _sane_plan(job)
+
+    service = StubService(plan_builder=builder)
+    store = SessionStore(directory=env.tmp / "sessions")
+    session = store.create()
+
+    ranked = [_ranked("Job A", "Alpha", 92), _ranked("Job B", "Beta", 90)]
+    report = run_autonomous_job_search(
+        search_fn=lambda q, p: NS(ranked=ranked),
+        service_factory=lambda: service,
+        driver_factory=lambda: NS(),
+        tracker=tr,
+        policy=AutonomyPolicy(),
+        session=session,
+        pause_on_input=True,
+    )
+    paused_id = report["paused_app_id"]
+    assert report["paused"] is True
+    # Job B was NOT reached while paused
+    assert set(service.calls) == {("start", "Job A")}
+
+    # user answers the licence question, then resumes the run
+    service.calls.clear()
+    resume_report = resume_autonomous_job_search(
+        session,
+        {"licence": "Yes"},
+        tracker=tr,
+        service_factory=lambda: service,
+        driver_factory=lambda: NS(),
+    )
+
+    assert resume_report.get("paused") is not True, "pause marker cleared on resume"
+    outcomes = {a["title"]: a["outcome"] for a in resume_report["applications"]}
+    assert outcomes.get("Job A") == "submitted", outcomes
+    assert outcomes.get("Job B") == "submitted", outcomes
+    assert tr.get(paused_id).submitted is True
+    # the licence answer is on the final plan
+    app_obj = tr.get(paused_id)
+    licence = [e for e in app_obj.fill_plan
+               if "licence" in e["question"].lower()][0]
+    assert licence["value"] == "Yes"
+
+    # profile memory recorded the answer for reuse on later jobs
+    from candidate.storage import load_profile
+    prof = load_profile()
+    assert prof.get_known_value("licence") == "Yes"
+

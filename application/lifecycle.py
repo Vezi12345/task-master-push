@@ -135,11 +135,24 @@ def transition(
     application: Application,
     target: ApplicationStatus,
     note: str = "",
+    outcome_store=None,
 ) -> Application:
     """Move ``application`` to ``target``, enforcing the lifecycle rules.
 
     Stamps ``submitted_at`` when entering SUBMITTED and appends to the
-    status history. Raises InvalidTransition for illegal moves."""
+    status history. Raises InvalidTransition for illegal moves.
+
+    When ``outcome_store`` (an ``OutcomeStore``) is provided and the target is
+    a learnable terminal outcome (OFFER / INTERVIEW / REJECTED), the outcome is
+    recorded against the application's aggregate keys. This is purely additive:
+    callers that omit the store behave exactly as before.
+    """
+    from .outcome_learning import (
+        band_for_status,
+        OUTCOME_INTERVIEW,
+        OUTCOME_OFFER,
+        OUTCOME_REJECTED,
+    )
     if not can_transition(application.status, target):
         raise InvalidTransition(application.status, target)
     previous = application.status
@@ -155,6 +168,10 @@ def transition(
         "at": application.updated_at,
         "note": note,
     })
+    if outcome_store is not None:
+        band = band_for_status(application.status)
+        if band in (OUTCOME_OFFER, OUTCOME_INTERVIEW, OUTCOME_REJECTED):
+            outcome_store.record_application(application)
     return application
 
 
