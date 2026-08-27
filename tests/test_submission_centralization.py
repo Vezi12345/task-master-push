@@ -113,7 +113,8 @@ class TestOrchestratorSubmitCentralization:
 
         class FakeService:
             def confirm_and_submit(self, app, tracker, driver, *,
-                                   consent_granted, user_answers, plan):
+                                   consent_granted, user_answers, plan,
+                                   force=False):
                 called["service"] = True
                 assert consent_granted is True, "must pass consent"
                 assert plan is not None, "must pass a fill plan"

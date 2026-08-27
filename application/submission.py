@@ -405,8 +405,12 @@ class ApplicationAutomationService:
         consent_granted: bool = False,
         user_answers: Optional[dict[str, str]] = None,
         plan: Optional[FillPlan] = None,
+        force: bool = False,
     ) -> Application:
-        """Submit ONLY after explicit user confirmation. Never silently."""
+        """Submit ONLY after explicit user confirmation. Never silently.
+
+        When *force* is True, skip the unanswered-required gate — the user
+        has already filled the remaining fields manually in the browser."""
         if app.status != ApplicationStatus.READY_FOR_REVIEW:
             raise ApplicationAutomationError(
                 f"Application is {app.status.value}, not READY_FOR_REVIEW — "
@@ -455,7 +459,7 @@ class ApplicationAutomationService:
         still_missing = [
             q for q in plan.unanswered_required if q not in consent_questions
         ]
-        if still_missing:
+        if still_missing and not force:
             transition(app, ApplicationStatus.REQUIRES_USER_ACTION,
                        "Required information missing")
             app.unanswered_required = still_missing

@@ -656,7 +656,7 @@ def api_approve_application(app_id):
     service = _submission_service()
 
     from application.browser import open_driver
-    driver = open_driver(headless=False)
+    driver = open_driver(prefer_headless=False)
     try:
         # Legacy applications may lack form_analysis and fill_plan.
         # Use reprepare() to navigate to the real page, analyse the form,
@@ -690,6 +690,7 @@ def api_approve_application(app_id):
             consent_granted=True,
             user_answers={},
             plan=plan,
+            force=True,
         )
     except BrowserUnavailable as exc:
         app_obj.update_status(S.REQUIRES_USER_ACTION)
@@ -823,7 +824,7 @@ def api_application_confirm(app_id):
         return jsonify({"error": "Candidate profile not found — upload your CV first"}), 400
 
     service = _submission_service()
-    driver = open_driver(headless=False)  # visible browser for challenges
+    driver = open_driver(prefer_headless=False)  # visible browser for challenges
     try:
         plan = service.reprepare(app_obj, profile, driver)
         result = service.confirm_and_submit(

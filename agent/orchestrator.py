@@ -692,6 +692,7 @@ class JobApplicationAgent:
                     consent_granted=True,
                     user_answers={},
                     plan=plan,
+                    force=True,
                 )
             finally:
                 try:
